@@ -1,0 +1,634 @@
+<!DOCTYPE html><html class="light" lang="zh-CN"><head>
+<meta charset="utf-8">
+<meta content="width=device-width, initial-scale=1.0" name="viewport">
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&amp;display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&amp;display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet">
+<script id="tailwind-config">
+  tailwind.config = {
+    darkMode: "class",
+    theme: {
+      extend: {
+        "colors": {
+                "secondary-fixed-dim": "#c4c6d1",
+                "surface": "#fcf8fa",
+                "tertiary-fixed": "#fcdeb5",
+                "on-tertiary-fixed-variant": "#574425",
+                "secondary-fixed": "#e1e2ed",
+                "secondary-container": "#dedfeb",
+                "outline-variant": "#c6c6cd",
+                "surface-container-high": "#eae7e9",
+                "tertiary-fixed-dim": "#dec29a",
+                "on-background": "#1b1b1d",
+                "on-tertiary-container": "#98805d",
+                "surface-variant": "#e4e2e4",
+                "inverse-primary": "#bec6e0",
+                "surface-container-low": "#f6f3f5",
+                "outline": "#76777d",
+                "primary": "#000000",
+                "surface-bright": "#fcf8fa",
+                "on-secondary-fixed": "#191b24",
+                "on-tertiary": "#ffffff",
+                "secondary": "#5c5e68",
+                "on-secondary": "#ffffff",
+                "tertiary-container": "#271901",
+                "tertiary": "#000000",
+                "on-primary": "#ffffff",
+                "on-surface-variant": "#45464d",
+                "on-secondary-fixed-variant": "#444650",
+                "surface-tint": "#565e74",
+                "surface-container": "#f0edef",
+                "error": "#ba1a1a",
+                "surface-dim": "#dcd9db",
+                "on-error": "#ffffff",
+                "on-error-container": "#93000a",
+                "on-surface": "#1b1b1d",
+                "inverse-surface": "#303032",
+                "primary-fixed": "#dae2fd",
+                "on-secondary-container": "#60626c",
+                "primary-container": "#131b2e",
+                "background": "#fcf8fa",
+                "surface-container-lowest": "#ffffff",
+                "on-primary-container": "#7c839b",
+                "on-primary-fixed-variant": "#3f465c",
+                "on-tertiary-fixed": "#271901",
+                "inverse-on-surface": "#f3f0f2",
+                "surface-container-highest": "#e4e2e4",
+                "on-primary-fixed": "#131b2e",
+                "error-container": "#ffdad6",
+                "primary-fixed-dim": "#bec6e0"
+        },
+        "borderRadius": {
+                "DEFAULT": "0.125rem",
+                "lg": "0.25rem",
+                "xl": "0.5rem",
+                "full": "0.75rem"
+        },
+        "spacing": {
+                "toolbar_height": "56px",
+                "sidebar_width": "240px",
+                "sm": "8px",
+                "base": "8px",
+                "sidebar_collapsed": "64px",
+                "md": "16px",
+                "lg": "24px",
+                "xl": "32px",
+                "xs": "4px"
+        },
+        "fontFamily": {
+                "code-md": [
+                        "JetBrains Mono"
+                ],
+                "body-sm": [
+                        "Inter"
+                ],
+                "headline-lg": [
+                        "Inter"
+                ],
+                "title-lg": [
+                        "Inter"
+                ],
+                "display-sm": [
+                        "Inter"
+                ],
+                "body-lg": [
+                        "Inter"
+                ],
+                "title-md": [
+                        "Inter"
+                ],
+                "body-md": [
+                        "Inter"
+                ],
+                "headline-md": [
+                        "Inter"
+                ],
+                "label-md": [
+                        "Inter"
+                ]
+        },
+        "fontSize": {
+                "code-md": [
+                        "13px",
+                        {
+                                "lineHeight": "20px",
+                                "fontWeight": "400"
+                        }
+                ],
+                "body-sm": [
+                        "12px",
+                        {
+                                "lineHeight": "18px",
+                                "fontWeight": "400"
+                        }
+                ],
+                "headline-lg": [
+                        "24px",
+                        {
+                                "lineHeight": "32px",
+                                "letterSpacing": "-0.01em",
+                                "fontWeight": "600"
+                        }
+                ],
+                "title-lg": [
+                        "18px",
+                        {
+                                "lineHeight": "26px",
+                                "fontWeight": "600"
+                        }
+                ],
+                "display-sm": [
+                        "30px",
+                        {
+                                "lineHeight": "38px",
+                                "letterSpacing": "-0.02em",
+                                "fontWeight": "700"
+                        }
+                ],
+                "body-lg": [
+                        "16px",
+                        {
+                                "lineHeight": "24px",
+                                "fontWeight": "400"
+                        }
+                ],
+                "title-md": [
+                        "16px",
+                        {
+                                "lineHeight": "24px",
+                                "fontWeight": "600"
+                        }
+                ],
+                "body-md": [
+                        "14px",
+                        {
+                                "lineHeight": "20px",
+                                "fontWeight": "400"
+                        }
+                ],
+                "headline-md": [
+                        "20px",
+                        {
+                                "lineHeight": "28px",
+                                "fontWeight": "600"
+                        }
+                ],
+                "label-md": [
+                        "12px",
+                        {
+                                "lineHeight": "16px",
+                                "letterSpacing": "0.05em",
+                                "fontWeight": "600"
+                        }
+                ]
+        }
+},
+    },
+  }
+</script>
+<style>
+        body { font-family: 'Inter', sans-serif; }
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        .scroll-hide::-webkit-scrollbar { display: none; }
+        .animate-pulse-slow { animation: pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+        @keyframes scan {
+            0% { transform: translateY(-100%); }
+            100% { transform: translateY(100%); }
+        }
+        .scan-line { animation: scan 2s linear infinite; }
+        .console-font { font-family: 'JetBrains Mono', monospace; }
+        
+        /* Thin Scrollbar for panels */
+        .thin-scrollbar::-webkit-scrollbar {
+            width: 4px;
+            height: 4px;
+        }
+        .thin-scrollbar::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        .thin-scrollbar::-webkit-scrollbar-thumb {
+            background-color: #c6c6cd;
+            border-radius: 4px;
+        }
+        .dark-scrollbar::-webkit-scrollbar-thumb {
+            background-color: #45464d;
+        }
+    </style>
+</head>
+<body class="bg-background text-on-surface h-screen flex flex-col overflow-hidden">
+<!-- Execution TopBar -->
+<header class="bg-surface-container-lowest border-b border-outline-variant h-toolbar_height flex-shrink-0 flex items-center justify-between px-md w-full z-30">
+<div class="flex items-center gap-md h-full">
+<div class="flex items-center gap-sm border-r border-outline-variant pr-md mr-sm h-full py-2">
+<span class="material-symbols-outlined text-primary text-[20px]">terminal</span>
+<h1 class="font-title-md text-title-md text-on-surface">执行控制台</h1>
+</div>
+<nav class="flex items-center gap-xs text-body-sm font-body-sm text-secondary"><span class="">执行中心</span>
+<span class="material-symbols-outlined text-[14px]">chevron_right</span>
+<span class="text-on-surface font-medium">回归测试集 #1204</span>
+<span class="material-symbols-outlined text-[14px]">chevron_right</span>
+<span class="text-on-surface font-medium">Core API Suite</span></nav>
+</div>
+<div class="flex items-center h-full gap-sm">
+<div class="flex items-center gap-xs bg-surface-container rounded p-xs">
+<span class="px-2 py-0.5 text-label-md font-label-md text-secondary border-r border-outline-variant">进度: 72%</span>
+<span class="px-2 py-0.5 text-label-md font-label-md text-primary font-bold">124 成功</span>
+<span class="px-2 py-0.5 text-label-md font-label-md text-error font-bold">12 失败</span>
+</div>
+<div class="h-6 w-px bg-outline-variant mx-sm"></div>
+<div class="flex items-center gap-xs">
+<button class="flex items-center gap-xs px-3 py-1.5 hover:bg-surface-container rounded transition-colors text-label-md font-label-md text-secondary hover:text-on-surface">
+<span class="material-symbols-outlined text-[18px]">download</span> 导出
+            </button>
+<button class="flex items-center gap-xs px-3 py-1.5 bg-surface-container-high hover:bg-surface-variant rounded transition-colors text-label-md font-label-md text-on-surface border border-outline-variant">
+<span class="material-symbols-outlined text-[18px]">pause</span> 暂停
+            </button>
+<button class="flex items-center gap-xs px-3 py-1.5 bg-error/10 text-error hover:bg-error/20 rounded transition-colors text-label-md font-label-md border border-error/20">
+<span class="material-symbols-outlined text-[18px]" style="font-variation-settings: 'FILL' 1;">stop</span> 停止
+            </button>
+<button class="flex items-center gap-xs px-3 py-1.5 bg-surface-container-highest hover:bg-outline-variant text-on-surface rounded transition-colors text-label-md font-label-md border border-outline-variant">
+<span class="material-symbols-outlined text-[18px]">replay</span> 重跑失败用例
+            </button>
+<button class="flex items-center gap-xs px-4 py-1.5 bg-primary text-on-primary hover:bg-primary/90 rounded transition-colors text-label-md font-label-md shadow-sm ml-sm">
+<span class="material-symbols-outlined text-[18px]" style="font-variation-settings: 'FILL' 1;">play_arrow</span> 运行
+            </button>
+</div>
+</div>
+</header>
+<!-- Main Workspace (3 Panes) -->
+<main class="flex-1 flex overflow-hidden bg-surface-container-low w-full"><aside class="w-sidebar_width bg-[#0f172a] text-slate-400 flex flex-col flex-shrink-0 h-full">
+  <div class="flex-1 py-4 overflow-y-auto thin-scrollbar dark-scrollbar">
+    <div class="px-4 py-2 flex items-center gap-3 hover:bg-white/5 cursor-pointer">
+      <span class="material-symbols-outlined text-[20px]">dashboard</span>
+      <span class="text-body-sm font-medium">工作台</span>
+    </div>
+    <div class="px-4 py-2 flex items-center gap-3 hover:bg-white/5 cursor-pointer">
+      <span class="material-symbols-outlined text-[20px]">account_tree</span>
+      <span class="text-body-sm font-medium">项目管理</span>
+    </div>
+    <div class="px-4 py-2 flex items-center gap-3 hover:bg-white/5 cursor-pointer">
+      <span class="material-symbols-outlined text-[20px]">assignment</span>
+      <span class="text-body-sm font-medium">测试计划</span>
+    </div>
+    <div class="px-4 py-2 flex items-center gap-3 hover:bg-white/5 cursor-pointer">
+      <span class="material-symbols-outlined text-[20px]">hub</span>
+      <span class="text-body-sm font-medium">可视化编排</span>
+    </div>
+    <div class="px-4 py-2 flex items-center gap-3 hover:bg-white/5 cursor-pointer">
+      <span class="material-symbols-outlined text-[20px]">layers</span>
+      <span class="text-body-sm font-medium">场景组合</span>
+    </div>
+    <div class="px-4 py-2 flex items-center gap-3 hover:bg-white/5 cursor-pointer">
+      <span class="material-symbols-outlined text-[20px]">api</span>
+      <span class="text-body-sm font-medium">接口测试</span>
+    </div>
+    <div class="px-4 py-2 flex items-center gap-3 bg-primary text-white cursor-pointer">
+      <span class="material-symbols-outlined text-[20px]">terminal</span>
+      <span class="text-body-sm font-medium">执行中心</span>
+    </div>
+    <div class="px-4 py-2 flex items-center gap-3 hover:bg-white/5 cursor-pointer">
+      <span class="material-symbols-outlined text-[20px]">assessment</span>
+      <span class="text-body-sm font-medium">测试报告</span>
+    </div>
+    <div class="px-4 py-2 flex items-center gap-3 hover:bg-white/5 cursor-pointer">
+      <span class="material-symbols-outlined text-[20px]">settings_input_component</span>
+      <span class="text-body-sm font-medium">环境配置</span>
+    </div>
+    <div class="px-4 py-2 flex items-center gap-3 hover:bg-white/5 cursor-pointer">
+      <span class="material-symbols-outlined text-[20px]">settings</span>
+      <span class="text-body-sm font-medium">系统设置</span>
+    </div>
+  </div>
+</aside>
+<!-- Pane 1: Test Suite Tree (Left) -->
+<aside class="w-64 bg-surface-container-lowest border-r border-outline-variant flex flex-col flex-shrink-0 h-full">
+<div class="p-sm border-b border-outline-variant flex items-center justify-between bg-surface-container-lowest">
+<span class="font-label-md text-label-md text-on-surface-variant">测试集合</span>
+<div class="flex gap-1">
+<button class="p-1 hover:bg-surface-container rounded text-secondary"><span class="material-symbols-outlined text-[16px]">filter_list</span></button>
+<button class="p-1 hover:bg-surface-container rounded text-secondary"><span class="material-symbols-outlined text-[16px]">unfold_less</span></button>
+</div>
+</div>
+<div class="p-2 border-b border-outline-variant">
+<div class="relative w-full">
+<span class="material-symbols-outlined absolute left-2 top-1/2 -translate-y-1/2 text-secondary text-[16px]">search</span>
+<input class="w-full bg-surface text-on-surface border border-outline-variant rounded pl-8 pr-2 py-1 focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary font-body-sm text-body-sm h-7" placeholder="过滤用例..." type="text">
+</div>
+</div>
+<div class="flex-1 overflow-y-auto thin-scrollbar p-sm space-y-0.5">
+<!-- Tree Item Level 1 -->
+<div class="flex items-center gap-1 py-1 px-1 hover:bg-surface-container-low rounded cursor-pointer group">
+<span class="material-symbols-outlined text-[16px] text-secondary group-hover:text-primary transition-colors">expand_more</span>
+<span class="material-symbols-outlined text-[16px] text-secondary">folder</span>
+<span class="font-body-sm text-body-sm text-on-surface truncate">Core API Suite</span>
+<span class="ml-auto text-[10px] bg-primary/10 text-primary px-1.5 rounded-full">136/200</span>
+</div>
+<!-- Tree Item Level 2 -->
+<div class="flex items-center gap-1 py-1 px-1 pl-4 hover:bg-surface-container-low rounded cursor-pointer group">
+<span class="material-symbols-outlined text-[16px] text-secondary group-hover:text-primary transition-colors">expand_more</span>
+<span class="material-symbols-outlined text-[16px] text-secondary">folder</span>
+<span class="font-body-sm text-body-sm text-on-surface truncate">User Management</span>
+<div class="ml-auto flex items-center gap-1">
+<span class="w-1.5 h-1.5 rounded-full bg-[#10b981]"></span>
+<span class="w-1.5 h-1.5 rounded-full bg-error"></span>
+</div>
+</div>
+<!-- Tree Item Level 3 (Active) -->
+<div class="flex items-center gap-1 py-1 px-1 pl-8 bg-surface-container-high rounded cursor-pointer border-l-2 border-primary">
+<span class="material-symbols-outlined text-[16px] text-secondary opacity-0">expand_more</span>
+<span class="material-symbols-outlined text-[16px] text-[#10b981]">check_circle</span>
+<span class="font-body-sm text-body-sm text-on-surface truncate font-medium">GET /users/profile</span>
+<span class="ml-auto text-[10px] text-secondary">120ms</span>
+</div>
+<div class="flex items-center gap-1 py-1 px-1 pl-8 hover:bg-surface-container-low rounded cursor-pointer">
+<span class="material-symbols-outlined text-[16px] text-secondary opacity-0">expand_more</span>
+<span class="material-symbols-outlined text-[16px] text-error">cancel</span>
+<span class="font-body-sm text-body-sm text-error truncate">POST /users/avatar</span>
+<span class="ml-auto text-[10px] text-error">910ms</span>
+</div>
+<div class="flex items-center gap-1 py-1 px-1 pl-8 hover:bg-surface-container-low rounded cursor-pointer">
+<span class="material-symbols-outlined text-[16px] text-secondary opacity-0">expand_more</span>
+<span class="material-symbols-outlined text-[16px] text-secondary">hourglass_empty</span>
+<span class="font-body-sm text-body-sm text-secondary truncate">DELETE /users/{id}</span>
+<span class="ml-auto text-[10px] text-secondary">-</span>
+</div>
+<!-- More Level 2 -->
+<div class="flex items-center gap-1 py-1 px-1 pl-4 hover:bg-surface-container-low rounded cursor-pointer group mt-1">
+<span class="material-symbols-outlined text-[16px] text-secondary group-hover:text-primary transition-colors">chevron_right</span>
+<span class="material-symbols-outlined text-[16px] text-secondary">folder</span>
+<span class="font-body-sm text-body-sm text-on-surface truncate">Billing Services</span>
+<span class="ml-auto text-[10px] text-secondary">0/45</span>
+</div>
+<div class="flex items-center gap-1 py-1 px-1 pl-4 hover:bg-surface-container-low rounded cursor-pointer group mt-1">
+<span class="material-symbols-outlined text-[16px] text-secondary group-hover:text-primary transition-colors">chevron_right</span>
+<span class="material-symbols-outlined text-[16px] text-secondary">folder</span>
+<span class="font-body-sm text-body-sm text-on-surface truncate">Analytics Aggregation</span>
+<span class="ml-auto text-[10px] text-secondary">0/12</span>
+</div>
+</div>
+</aside>
+<!-- Pane 2: Execution Queue / Table (Middle) -->
+<section class="flex-1 flex flex-col min-w-0 bg-surface-container-lowest h-full relative">
+<!-- Progress Bar Thin -->
+<div class="h-1 w-full bg-surface-container-high absolute top-0 left-0 z-10">
+<div class="h-full bg-primary transition-all duration-300" style="width: 72%;"></div>
+</div>
+<div class="p-sm border-b border-outline-variant flex items-center justify-between bg-surface-container-lowest mt-1">
+<div class="flex items-center gap-md">
+<h2 class="font-label-md text-label-md text-on-surface">执行队列 (Execution Queue)</h2>
+<div class="flex items-center gap-1.5">
+<span class="w-2 h-2 rounded-full bg-[#10b981] animate-pulse"></span>
+<span class="text-[11px] font-mono text-secondary">Running 4 workers</span>
+</div>
+</div>
+<div class="flex gap-2">
+<div class="flex border border-outline-variant rounded overflow-hidden">
+<button class="px-2 py-0.5 bg-surface-container-high text-on-surface text-label-sm font-label-sm border-r border-outline-variant">全部</button>
+<button class="px-2 py-0.5 hover:bg-surface-container text-secondary text-label-sm font-label-sm border-r border-outline-variant">失败 (12)</button>
+<button class="px-2 py-0.5 hover:bg-surface-container text-secondary text-label-sm font-label-sm">待执行</button>
+</div>
+</div>
+</div>
+<div class="flex-1 overflow-auto thin-scrollbar">
+<table class="w-full text-left border-collapse">
+<thead class="sticky top-0 bg-surface-container-low border-b border-outline-variant z-10 shadow-sm">
+<tr>
+<th class="px-3 py-1.5 text-[11px] font-semibold text-secondary uppercase tracking-wider w-8">#</th>
+<th class="px-3 py-1.5 text-[11px] font-semibold text-secondary uppercase tracking-wider w-20">状态</th>
+<th class="px-3 py-1.5 text-[11px] font-semibold text-secondary uppercase tracking-wider">用例名称 / Endpoint</th>
+<th class="px-3 py-1.5 text-[11px] font-semibold text-secondary uppercase tracking-wider w-24">耗时</th>
+<th class="px-3 py-1.5 text-[11px] font-semibold text-secondary uppercase tracking-wider text-right w-20">操作</th>
+</tr>
+</thead>
+<tbody class="font-body-sm text-body-sm divide-y divide-outline-variant/50" id="test-table-body">
+<tr class="hover:bg-surface-container-low group transition-colors">
+<td class="px-3 py-1.5 text-secondary font-mono text-[11px]">136</td>
+<td class="px-3 py-1.5">
+<div class="flex items-center gap-1 text-[#10b981]">
+<span class="material-symbols-outlined text-[14px]" style="font-variation-settings: 'FILL' 1;">check_circle</span>
+<span class="text-[11px]">Pass</span>
+</div>
+</td>
+<td class="px-3 py-1.5">
+<div class="font-medium text-on-surface truncate">GET /metrics - 数据聚合性能</div>
+<div class="text-[11px] text-secondary font-mono truncate">api.v1.metrics.get</div>
+</td>
+<td class="px-3 py-1.5 text-secondary font-mono text-[11px]">0.12s</td>
+<td class="px-3 py-1.5 text-right">
+<button class="material-symbols-outlined text-[16px] text-secondary hover:text-primary transition-colors opacity-0 group-hover:opacity-100">info</button>
+</td>
+</tr>
+<tr class="hover:bg-surface-container-low group transition-colors bg-error/5">
+<td class="px-3 py-1.5 text-secondary font-mono text-[11px]">135</td>
+<td class="px-3 py-1.5">
+<div class="flex items-center gap-1 text-error">
+<span class="material-symbols-outlined text-[14px]" style="font-variation-settings: 'FILL' 1;">cancel</span>
+<span class="text-[11px] font-semibold">Fail</span>
+</div>
+</td>
+<td class="px-3 py-1.5">
+<div class="font-medium text-error truncate">POST /user/avatar - 文件上传校验</div>
+<div class="text-[11px] text-secondary font-mono truncate">api.v1.user.upload_avatar</div>
+</td>
+<td class="px-3 py-1.5 text-secondary font-mono text-[11px]">0.91s</td>
+<td class="px-3 py-1.5 text-right">
+<button class="material-symbols-outlined text-[16px] text-error hover:text-error transition-colors">bug_report</button>
+</td>
+</tr>
+<tr class="hover:bg-surface-container-low group transition-colors">
+<td class="px-3 py-1.5 text-secondary font-mono text-[11px]">134</td>
+<td class="px-3 py-1.5">
+<div class="flex items-center gap-1 text-[#10b981]">
+<span class="material-symbols-outlined text-[14px]" style="font-variation-settings: 'FILL' 1;">check_circle</span>
+<span class="text-[11px]">Pass</span>
+</div>
+</td>
+<td class="px-3 py-1.5">
+<div class="font-medium text-on-surface truncate">DELETE /v1/post/12 - 联级删除测试</div>
+<div class="text-[11px] text-secondary font-mono truncate">api.v1.posts.delete</div>
+</td>
+<td class="px-3 py-1.5 text-secondary font-mono text-[11px]">1.43s</td>
+<td class="px-3 py-1.5 text-right">
+<button class="material-symbols-outlined text-[16px] text-secondary hover:text-primary transition-colors opacity-0 group-hover:opacity-100">info</button>
+</td>
+</tr>
+<tr class="hover:bg-surface-container-low group transition-colors">
+<td class="px-3 py-1.5 text-secondary font-mono text-[11px]">133</td>
+<td class="px-3 py-1.5">
+<div class="flex items-center gap-1 text-[#10b981]">
+<span class="material-symbols-outlined text-[14px]" style="font-variation-settings: 'FILL' 1;">check_circle</span>
+<span class="text-[11px]">Pass</span>
+</div>
+</td>
+<td class="px-3 py-1.5">
+<div class="font-medium text-on-surface truncate">AUTH /refresh - Token续期校验</div>
+<div class="text-[11px] text-secondary font-mono truncate">api.auth.token.refresh</div>
+</td>
+<td class="px-3 py-1.5 text-secondary font-mono text-[11px]">1.12s</td>
+<td class="px-3 py-1.5 text-right">
+<button class="material-symbols-outlined text-[16px] text-secondary hover:text-primary transition-colors opacity-0 group-hover:opacity-100">info</button>
+</td>
+</tr>
+<!-- Running Row -->
+<tr class="bg-primary/5 border-l-2 border-primary group transition-colors">
+<td class="px-3 py-1.5 text-primary font-mono text-[11px]">137</td>
+<td class="px-3 py-1.5">
+<div class="flex items-center gap-1 text-primary">
+<span class="material-symbols-outlined text-[14px] animate-spin">sync</span>
+<span class="text-[11px] font-semibold">Running</span>
+</div>
+</td>
+<td class="px-3 py-1.5">
+<div class="font-medium text-on-surface truncate">PUT /config/update - 配置热更新</div>
+<div class="text-[11px] text-secondary font-mono truncate">api.v1.config.update</div>
+</td>
+<td class="px-3 py-1.5 text-primary font-mono text-[11px]">0.45s...</td>
+<td class="px-3 py-1.5 text-right">
+<button class="material-symbols-outlined text-[16px] text-secondary hover:text-error transition-colors">stop_circle</button>
+</td>
+</tr>
+<!-- Pending Rows -->
+<tr class="hover:bg-surface-container-low group transition-colors opacity-60">
+<td class="px-3 py-1.5 text-secondary font-mono text-[11px]">138</td>
+<td class="px-3 py-1.5">
+<div class="flex items-center gap-1 text-secondary">
+<span class="material-symbols-outlined text-[14px]">hourglass_empty</span>
+<span class="text-[11px]">Pending</span>
+</div>
+</td>
+<td class="px-3 py-1.5">
+<div class="font-medium text-on-surface truncate">GET /reports/export - 报表导出</div>
+<div class="text-[11px] text-secondary font-mono truncate">api.v1.reports.export</div>
+</td>
+<td class="px-3 py-1.5 text-secondary font-mono text-[11px]">-</td>
+<td class="px-3 py-1.5 text-right">
+<button class="material-symbols-outlined text-[16px] text-secondary hover:text-primary transition-colors opacity-0 group-hover:opacity-100">play_arrow</button>
+</td>
+</tr>
+<tr class="hover:bg-surface-container-low group transition-colors opacity-60">
+<td class="px-3 py-1.5 text-secondary font-mono text-[11px]">139</td>
+<td class="px-3 py-1.5">
+<div class="flex items-center gap-1 text-secondary">
+<span class="material-symbols-outlined text-[14px]">hourglass_empty</span>
+<span class="text-[11px]">Pending</span>
+</div>
+</td>
+<td class="px-3 py-1.5">
+<div class="font-medium text-on-surface truncate">POST /webhook/trigger - 钩子触发</div>
+<div class="text-[11px] text-secondary font-mono truncate">api.v1.webhook.trigger</div>
+</td>
+<td class="px-3 py-1.5 text-secondary font-mono text-[11px]">-</td>
+<td class="px-3 py-1.5 text-right">
+<button class="material-symbols-outlined text-[16px] text-secondary hover:text-primary transition-colors opacity-0 group-hover:opacity-100">play_arrow</button>
+</td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<!-- Pane 3: Terminal & Diagnostics (Right) -->
+<aside class="w-[400px] border-l border-outline-variant flex flex-col flex-shrink-0 h-full bg-[#1e1e1e]">
+<!-- Logs Panel -->
+<div class="flex flex-col h-[60%] border-b border-[#333333]">
+<div class="p-2 bg-[#252526] border-b border-[#333333] flex items-center justify-between shadow-sm z-10">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-[#cccccc] text-[16px]">subject</span>
+<span class="text-[11px] font-mono text-[#cccccc] uppercase tracking-wider">Streaming Logs</span>
+</div>
+<div class="flex gap-2">
+<button class="material-symbols-outlined text-[#858585] hover:text-white text-[16px] transition-colors">filter_alt</button>
+<button class="material-symbols-outlined text-[#858585] hover:text-white text-[16px] transition-colors">delete_sweep</button>
+</div>
+</div>
+<div class="flex-1 overflow-y-auto dark-scrollbar p-3 console-font text-[11px] leading-relaxed text-[#cccccc] bg-[#1e1e1e] space-y-1">
+<div class="flex">
+<span class="text-[#858585] w-20 flex-shrink-0">10:42:01</span>
+<span class="text-[#569cd6] w-10 flex-shrink-0">INFO</span>
+<span class="text-[#cccccc]">Initializing runner environment...</span>
+</div>
+<div class="flex">
+<span class="text-[#858585] w-20 flex-shrink-0">10:42:05</span>
+<span class="text-[#569cd6] w-10 flex-shrink-0">INFO</span>
+<span class="text-[#cccccc]">Thread pool established (4 workers)</span>
+</div>
+<div class="flex">
+<span class="text-[#858585] w-20 flex-shrink-0">10:42:08</span>
+<span class="text-[#c586c0] w-10 flex-shrink-0">TASK</span>
+<span class="text-[#cccccc]">Executing suite: Core_API_Suite</span>
+</div>
+<div class="flex">
+<span class="text-[#858585] w-20 flex-shrink-0">10:42:15</span>
+<span class="text-[#4caf50] w-10 flex-shrink-0">PASS</span>
+<span class="text-[#cccccc]">TestLoginPassed [120ms]</span>
+</div>
+<div class="flex">
+<span class="text-[#858585] w-20 flex-shrink-0">10:42:18</span>
+<span class="text-[#4caf50] w-10 flex-shrink-0">PASS</span>
+<span class="text-[#cccccc]">TestSignupPassed [340ms]</span>
+</div>
+<div class="flex bg-[#f44336]/10 -mx-3 px-3 py-0.5 border-l-2 border-[#f44336]">
+<span class="text-[#858585] w-20 flex-shrink-0">10:42:22</span>
+<span class="text-[#f44336] w-10 flex-shrink-0">FAIL</span>
+<span class="text-[#f44336]">Validation_Error at line 45: 'Expected 200, got 500'</span>
+</div>
+<div class="flex">
+<span class="text-[#858585] w-20 flex-shrink-0">10:42:22</span>
+<span class="text-[#ce9178] w-10 flex-shrink-0">DUMP</span>
+<span class="text-[#ce9178] whitespace-pre">Response Body: { "error": "Internal Server Error", "traceId": "x-891-b" }</span>
+</div>
+<div class="flex">
+<span class="text-[#858585] w-20 flex-shrink-0">10:42:23</span>
+<span class="text-[#dcdcaa] w-10 flex-shrink-0">WARN</span>
+<span class="text-[#dcdcaa]">Retrying connection attempt 1/3...</span>
+</div>
+<div class="flex mt-2">
+<span class="text-[#4caf50] font-bold animate-pulse">&gt; Monitoring incoming packets...</span>
+<span class="inline-block w-2 h-3 bg-[#cccccc] align-middle ml-1 animate-pulse" style="opacity: 1;"></span>
+</div>
+</div>
+</div>
+<!-- Failure Diagnosis Panel (AI Insight) -->
+<div class="flex flex-col h-[40%] bg-surface-container-lowest">
+<div class="p-2 bg-surface-container-low border-b border-outline-variant flex items-center justify-between">
+<div class="flex items-center gap-1.5">
+<span class="material-symbols-outlined text-primary text-[16px]">psychology</span>
+<span class="text-[12px] font-label-sm font-semibold text-on-surface">AI Failure Diagnosis</span>
+</div>
+</div>
+<div class="p-sm overflow-y-auto thin-scrollbar flex-1">
+<div class="mb-2">
+<h4 class="text-body-sm font-semibold text-error mb-1">POST /user/avatar</h4>
+<p class="text-[11px] text-secondary font-mono bg-surface-container p-1.5 rounded border border-outline-variant/50">Expected status 200 but got 500. Error: "Internal Server Error"</p>
+</div>
+<div class="bg-primary/5 border border-primary/20 rounded p-2 mb-2">
+<div class="flex items-center gap-1 mb-1 text-primary">
+<span class="material-symbols-outlined text-[14px]">lightbulb</span>
+<span class="text-[11px] font-semibold">Insight</span>
+</div>
+<p class="text-[11px] text-on-surface leading-relaxed">
+                        The avatar upload endpoint failed because the mock S3 bucket in the staging environment is currently throwing connection timeouts. Recent logs indicate a security group rule change at 10:30 AM might be blocking port 443 outbound from the test runner subnet.
+                    </p>
+</div>
+<div class="flex gap-2">
+<button class="px-2 py-1 bg-surface-container-high hover:bg-surface-variant rounded border border-outline-variant text-[10px] font-medium transition-colors">View Trace [x-891-b]</button>
+<button class="px-2 py-1 bg-surface-container-high hover:bg-surface-variant rounded border border-outline-variant text-[10px] font-medium transition-colors">Create Jira Ticket</button>
+</div>
+</div>
+</div>
+</aside>
+</main>
+<script>
+    // Blinking cursor effect for terminal
+    setInterval(() => {
+        const cursor = document.querySelector('.animate-pulse.bg-\\[\\#cccccc\\]');
+        if(cursor) {
+            cursor.style.opacity = cursor.style.opacity === '0' ? '1' : '0';
+        }
+    }, 500);
+</script>
+
+
+</body></html>

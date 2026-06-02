@@ -1,0 +1,494 @@
+<!DOCTYPE html><html class="light" lang="zh-CN"><head>
+<meta charset="utf-8">
+<meta content="width=device-width, initial-scale=1.0" name="viewport">
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&amp;display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet">
+<script id="tailwind-config">
+  tailwind.config = {
+    darkMode: "class",
+    theme: {
+      extend: {
+        "colors": {
+                "secondary-fixed-dim": "#c4c6d1",
+                "surface": "#fcf8fa",
+                "tertiary-fixed": "#fcdeb5",
+                "on-tertiary-fixed-variant": "#574425",
+                "secondary-fixed": "#e1e2ed",
+                "secondary-container": "#dedfeb",
+                "outline-variant": "#c6c6cd",
+                "surface-container-high": "#eae7e9",
+                "tertiary-fixed-dim": "#dec29a",
+                "on-background": "#1b1b1d",
+                "on-tertiary-container": "#98805d",
+                "surface-variant": "#e4e2e4",
+                "inverse-primary": "#bec6e0",
+                "surface-container-low": "#f6f3f5",
+                "outline": "#76777d",
+                "primary": "#000000",
+                "surface-bright": "#fcf8fa",
+                "on-secondary-fixed": "#191b24",
+                "on-tertiary": "#ffffff",
+                "secondary": "#5c5e68",
+                "on-secondary": "#ffffff",
+                "tertiary-container": "#271901",
+                "tertiary": "#000000",
+                "on-primary": "#ffffff",
+                "on-surface-variant": "#45464d",
+                "on-secondary-fixed-variant": "#444650",
+                "surface-tint": "#565e74",
+                "surface-container": "#f0edef",
+                "error": "#ba1a1a",
+                "surface-dim": "#dcd9db",
+                "on-error": "#ffffff",
+                "on-error-container": "#93000a",
+                "on-surface": "#1b1b1d",
+                "inverse-surface": "#303032",
+                "primary-fixed": "#dae2fd",
+                "on-secondary-container": "#60626c",
+                "primary-container": "#131b2e",
+                "background": "#fcf8fa",
+                "surface-container-lowest": "#ffffff",
+                "on-primary-container": "#7c839b",
+                "on-primary-fixed-variant": "#3f465c",
+                "on-tertiary-fixed": "#271901",
+                "inverse-on-surface": "#f3f0f2",
+                "surface-container-highest": "#e4e2e4",
+                "on-primary-fixed": "#131b2e",
+                "error-container": "#ffdad6",
+                "primary-fixed-dim": "#bec6e0"
+        },
+        "borderRadius": {
+                "DEFAULT": "0.125rem",
+                "lg": "0.25rem",
+                "xl": "0.5rem",
+                "full": "0.75rem"
+        },
+        "spacing": {
+                "toolbar_height": "56px",
+                "sidebar_width": "240px",
+                "sm": "8px",
+                "base": "8px",
+                "sidebar_collapsed": "64px",
+                "md": "16px",
+                "lg": "24px",
+                "xl": "32px",
+                "xs": "4px"
+        },
+        "fontFamily": {
+                "code-md": [
+                        "JetBrains Mono"
+                ],
+                "body-sm": [
+                        "Inter"
+                ],
+                "headline-lg": [
+                        "Inter"
+                ],
+                "title-lg": [
+                        "Inter"
+                ],
+                "display-sm": [
+                        "Inter"
+                ],
+                "body-lg": [
+                        "Inter"
+                ],
+                "title-md": [
+                        "Inter"
+                ],
+                "body-md": [
+                        "Inter"
+                ],
+                "headline-md": [
+                        "Inter"
+                ],
+                "label-md": [
+                        "Inter"
+                ]
+        },
+        "fontSize": {
+                "code-md": [
+                        "13px",
+                        {
+                                "lineHeight": "20px",
+                                "fontWeight": "400"
+                        }
+                ],
+                "body-sm": [
+                        "12px",
+                        {
+                                "lineHeight": "18px",
+                                "fontWeight": "400"
+                        }
+                ],
+                "headline-lg": [
+                        "24px",
+                        {
+                                "lineHeight": "32px",
+                                "letterSpacing": "-0.01em",
+                                "fontWeight": "600"
+                        }
+                ],
+                "title-lg": [
+                        "18px",
+                        {
+                                "lineHeight": "26px",
+                                "fontWeight": "600"
+                        }
+                ],
+                "display-sm": [
+                        "30px",
+                        {
+                                "lineHeight": "38px",
+                                "letterSpacing": "-0.02em",
+                                "fontWeight": "700"
+                        }
+                ],
+                "body-lg": [
+                        "16px",
+                        {
+                                "lineHeight": "24px",
+                                "fontWeight": "400"
+                        }
+                ],
+                "title-md": [
+                        "16px",
+                        {
+                                "lineHeight": "24px",
+                                "fontWeight": "600"
+                        }
+                ],
+                "body-md": [
+                        "14px",
+                        {
+                                "lineHeight": "20px",
+                                "fontWeight": "400"
+                        }
+                ],
+                "headline-md": [
+                        "20px",
+                        {
+                                "lineHeight": "28px",
+                                "fontWeight": "600"
+                        }
+                ],
+                "label-md": [
+                        "12px",
+                        {
+                                "lineHeight": "16px",
+                                "letterSpacing": "0.05em",
+                                "fontWeight": "600"
+                        }
+                ]
+        }
+},
+    },
+  }
+</script>
+<style>
+        body { font-family: 'Inter', sans-serif; }
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        .progress-ring__circle {
+            transition: stroke-dashoffset 0.35s;
+            transform: rotate(-90deg);
+            transform-origin: 50% 50%;
+        }
+        .bento-card {
+            transition: transform 0.2s ease-in-out, box-shadow 0.2s ease-in-out;
+        }
+        .bento-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0px 4px 12px rgba(15, 23, 42, 0.08);
+        }
+        .heatmap-cell {
+            transition: opacity 0.2s;
+        }
+        .heatmap-cell:hover {
+            opacity: 0.8;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body class="bg-surface text-on-surface">
+<!-- TopNavBar from JSON -->
+<header class="bg-surface-container-lowest text-primary font-body-md fixed top-0 right-0 left-0 md:left-64 h-toolbar_height border-b border-outline-variant z-30 flex items-center justify-between px-lg w-auto transition-all duration-300 ease-in-out"><div class="flex items-center gap-lg h-full"><button class="md:hidden text-on-surface-variant p-2 rounded-lg hover:bg-surface-container-low"><span class="material-symbols-outlined">menu</span></button><h2 class="font-headline-md text-headline-md font-bold text-primary hidden md:block">TestAuto Platform</h2><div class="relative hidden sm:block w-64 lg:w-96"><span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant" style="font-size: 18px;">search</span><input class="w-full bg-surface text-on-surface border border-outline-variant rounded-lg pl-10 pr-4 py-1.5 focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-all font-body-sm text-body-sm" placeholder="Search tests, endpoints..." type="text"></div></div><div class="flex items-center h-full gap-4"><nav class="hidden lg:flex h-full items-center gap-6 mr-4"><a class="text-on-surface-variant hover:text-primary hover:bg-surface-container-low h-full flex items-center px-2 border-b-2 border-transparent transition-colors font-label-md text-label-md" href="#">最近</a><a class="text-on-surface-variant hover:text-primary hover:bg-surface-container-low h-full flex items-center px-2 border-b-2 border-transparent transition-colors font-label-md text-label-md" href="#">收藏</a><a class="text-on-surface-variant hover:text-primary hover:bg-surface-container-low h-full flex items-center px-2 border-b-2 border-transparent transition-colors font-label-md text-label-md" href="#">回收站</a></nav><div class="flex items-center gap-2"><button class="text-on-surface-variant hover:bg-surface-container-low p-2 rounded-lg transition-colors relative"><span class="material-symbols-outlined">notifications</span><span class="absolute top-1.5 right-1.5 w-2 h-2 bg-error rounded-full"></span></button><button class="text-on-surface-variant hover:bg-surface-container-low p-2 rounded-lg transition-colors"><span class="material-symbols-outlined">settings_suggest</span></button></div><div class="h-8 w-px bg-outline-variant hidden sm:block"></div><div class="hidden sm:flex items-center gap-2"><button class="border border-primary text-primary hover:bg-surface-container-low rounded-lg py-1.5 px-4 font-label-md text-label-md transition-colors">导出报告</button><button class="bg-primary text-on-primary hover:bg-primary/90 rounded-lg py-1.5 px-4 font-label-md text-label-md transition-colors shadow-sm">运行测试套件</button></div></div></header>
+<!-- SideNavBar from JSON -->
+<aside class="bg-surface-container-lowest text-primary h-screen w-sidebar_width fixed left-0 top-0 border-r border-outline-variant shadow-sm flex flex-col p-md z-40 hidden md:flex"><div class="flex items-center gap-3 mb-xl px-sm mt-sm"><div class="w-8 h-8 rounded bg-primary flex items-center justify-center text-on-primary"><span class="material-symbols-outlined" style="font-size: 20px;">bug_report</span></div><div><h1 class="font-headline-md text-headline-md font-bold text-primary">TestAuto AI</h1><p class="font-label-sm text-label-sm text-on-surface-variant">v2.4 Enterprise</p></div></div><button class="bg-primary text-on-primary hover:bg-primary/90 transition-colors duration-200 rounded-lg py-2 px-4 flex items-center justify-center gap-2 mb-lg active:scale-95 transform font-label-md text-label-md w-full"><span class="material-symbols-outlined" style="font-size: 18px;">add</span>新建项目</button><nav class="flex-1 space-y-1 overflow-y-auto"><a class="text-on-surface-variant hover:bg-surface-variant hover:bg-surface-container-high transition-colors duration-200 rounded-lg flex items-center gap-3 px-3 py-2.5 active:scale-95 transform transition-transform font-label-md text-label-md" href="#"><span class="material-symbols-outlined">dashboard</span>工作台</a><a class="text-on-surface-variant hover:bg-surface-variant hover:bg-surface-container-high transition-colors duration-200 rounded-lg flex items-center gap-3 px-3 py-2.5 active:scale-95 transform transition-transform font-label-md text-label-md" href="#"><span class="material-symbols-outlined">folder_special</span>项目管理</a><a class="text-on-surface-variant hover:bg-surface-variant hover:bg-surface-container-high transition-colors duration-200 rounded-lg flex items-center gap-3 px-3 py-2.5 active:scale-95 transform transition-transform font-label-md text-label-md" href="#"><span class="material-symbols-outlined">event_note</span>测试计划</a><a class="text-on-surface-variant hover:bg-surface-variant hover:bg-surface-container-high transition-colors duration-200 rounded-lg flex items-center gap-3 px-3 py-2.5 active:scale-95 transform transition-transform font-label-md text-label-md" href="#"><span class="material-symbols-outlined">schema</span>可视化编排</a><a class="text-on-surface-variant hover:bg-surface-variant hover:bg-surface-container-high transition-colors duration-200 rounded-lg flex items-center gap-3 px-3 py-2.5 active:scale-95 transform transition-transform font-label-md text-label-md" href="#"><span class="material-symbols-outlined">account_tree</span>场景组合</a><a class="text-on-surface-variant hover:bg-surface-variant hover:bg-surface-container-high transition-colors duration-200 rounded-lg flex items-center gap-3 px-3 py-2.5 active:scale-95 transform transition-transform font-label-md text-label-md" href="#"><span class="material-symbols-outlined">api</span>接口测试</a><a class="text-on-surface-variant hover:bg-surface-variant hover:bg-surface-container-high transition-colors duration-200 rounded-lg flex items-center gap-3 px-3 py-2.5 active:scale-95 transform transition-transform font-label-md text-label-md" href="#"><span class="material-symbols-outlined">play_circle</span>执行中心</a><a class="bg-secondary-fixed text-on-secondary-fixed font-bold rounded-lg flex items-center gap-3 px-3 py-2.5 active:scale-95 transform transition-transform font-label-md text-label-md" href="#"><span class="material-symbols-outlined">description</span>测试报告</a><a class="text-on-surface-variant hover:bg-surface-variant hover:bg-surface-container-high transition-colors duration-200 rounded-lg flex items-center gap-3 px-3 py-2.5 active:scale-95 transform transition-transform font-label-md text-label-md" href="#"><span class="material-symbols-outlined">settings_input_component</span>环境配置</a></nav><div class="mt-auto pt-4 border-t border-outline-variant space-y-1"><a class="text-on-surface-variant hover:bg-surface-variant hover:bg-surface-container-high transition-colors duration-200 rounded-lg flex items-center gap-3 px-3 py-2 active:scale-95 transform transition-transform font-label-md text-label-md" href="#"><span class="material-symbols-outlined">settings</span>系统设置</a><a class="text-on-surface-variant hover:bg-surface-variant hover:bg-surface-container-high transition-colors duration-200 rounded-lg flex items-center gap-3 px-3 py-2 active:scale-95 transform transition-transform font-label-md text-label-md" href="#"><span class="material-symbols-outlined">help</span>文档中心</a><div class="flex items-center gap-3 mt-4 px-3 py-2 cursor-pointer rounded-lg hover:bg-surface-container-high transition-colors duration-200"><img alt="User Profile" class="w-8 h-8 rounded-full object-cover" src="https://lh3.googleusercontent.com/aida-public/AB6AXuAf195mkTFK62VP4o9JVnEC5cgvGqdYEElV0OGLM0dhKeUWa4Aknj59BNYs-G84me7cwqlTSdGhrXEEjL4Xi5m2RNXJUCBOR1Wn2VQf-mtvXcNNBZTsw_pk1xWtYAJ9odtEDAp85dyI7g61kUVyEBLMbwKIWE2_KCfe_c3n6uSJcJ3Fm0lUWAIgoarojbVd1GBPuS2sTeqzKSdHGhDbqHECkyU-ZZlhttVhOWfon7d17j_4RmFmz4m2By-DKEV636k9ih1uRdndDhU"><div class="overflow-hidden"><p class="font-label-md text-label-md text-on-surface truncate">Sarah Jenkins</p><p class="font-label-sm text-label-sm text-on-surface-variant truncate">QA Lead</p></div></div></div></aside>
+<!-- Main Content Canvas -->
+<main class="md:ml-sidebar_width pt-20 px-md md:px-lg pb-xl">
+<!-- Header Section -->
+<header class="flex flex-col md:flex-row md:items-end justify-between mb-lg gap-md">
+<div>
+<nav class="flex items-center gap-xs text-secondary text-body-sm font-body-sm mb-xs"><span class="hover:underline cursor-pointer">测试报告</span><span class="material-symbols-outlined text-[14px]">chevron_right</span><span class="text-primary font-medium">#ER-20231024-001</span></nav>
+<div class="flex items-center gap-md mt-sm">
+<h1 class="text-display-sm font-display-sm text-on-surface">核心结算流程测试报告</h1>
+</div>
+<p class="text-body-md font-body-md text-secondary mt-sm flex items-center gap-md">
+<span class="">执行时间: 2023-10-24 14:30:15</span>
+<span class="w-1 h-1 rounded-full bg-outline-variant"></span>
+<span class="">执行人: 系统定时任务 (CI/CD)</span>
+<span class="w-1 h-1 rounded-full bg-outline-variant"></span>
+<span class="">分支: <code class="font-code-md text-code-md bg-surface-container-high px-1 py-0.5 rounded">release/v2.4.1</code></span>
+</p>
+</div>
+<div class="flex items-center gap-sm">
+<button class="flex items-center gap-xs border border-outline-variant px-md py-sm rounded-lg text-label-md font-label-md text-secondary hover:bg-surface-container-low transition-colors">
+<span class="material-symbols-outlined text-[18px]">share</span>
+                    分享
+                </button>
+<button class="flex items-center gap-xs border border-outline-variant px-md py-sm rounded-lg text-label-md font-label-md text-secondary hover:bg-surface-container-low transition-colors">
+<span class="material-symbols-outlined text-[18px]">picture_as_pdf</span>
+                    导出 PDF
+                </button>
+<button class="flex items-center gap-xs bg-primary text-on-primary px-md py-sm rounded-lg text-label-md font-label-md hover:bg-primary/90 transition-colors">
+<span class="material-symbols-outlined text-[18px]">play_arrow</span>
+                    重新运行
+                </button>
+</div>
+</header>
+<!-- Overall Conclusion Indicator -->
+<div class="bg-error-container text-on-error-container p-lg rounded-xl mb-lg border border-error/20 flex flex-col md:flex-row md:items-center justify-between gap-md">
+<div class="flex items-center gap-md">
+<div class="w-12 h-12 rounded-full bg-error text-on-error flex items-center justify-center flex-shrink-0">
+<span class="material-symbols-outlined text-[28px]">warning</span>
+</div>
+<div>
+<h2 class="text-headline-lg font-headline-lg mb-xs">测试部分失败</h2>
+<p class="text-body-lg font-body-lg opacity-90">本次回归测试发现 124 个失败用例，主要集中在交易模块和库存模块。阻断了发布流程，建议优先修复核心流程问题。</p>
+</div>
+</div>
+<div class="flex-shrink-0">
+<button class="bg-error text-on-error px-md py-sm rounded-lg text-label-md font-label-md hover:opacity-90 transition-opacity">查看阻断问题</button>
+</div>
+</div>
+<!-- KPI Summary Grid -->
+<div class="grid grid-cols-2 md:grid-cols-5 gap-md mb-xl">
+<!-- Total -->
+<div class="bg-surface-container-lowest border border-outline-variant p-md rounded-xl">
+<div class="text-label-md font-label-md text-secondary mb-xs flex items-center gap-xs">
+<span class="material-symbols-outlined text-[16px]">assignment</span> 总用例数
+        </div>
+<div class="text-headline-lg font-headline-lg text-on-surface">1,248</div>
+</div>
+<!-- Passed -->
+<div class="bg-surface-container-lowest border border-outline-variant p-md rounded-xl">
+<div class="text-label-md font-label-md text-secondary mb-xs flex items-center gap-xs">
+<span class="material-symbols-outlined text-[16px] text-green-600">check_circle</span> 通过
+        </div>
+<div class="flex items-end gap-sm">
+<div class="text-headline-lg font-headline-lg text-on-surface">1,124</div>
+<div class="text-label-md font-label-md text-green-600 bg-green-50 px-1.5 py-0.5 rounded mb-1">90.0%</div>
+</div>
+</div>
+<!-- Failed -->
+<div class="bg-surface-container-lowest border border-error/30 bg-error/5 p-md rounded-xl">
+<div class="text-label-md font-label-md text-error mb-xs flex items-center gap-xs">
+<span class="material-symbols-outlined text-[16px]">cancel</span> 失败
+        </div>
+<div class="flex items-end gap-sm">
+<div class="text-headline-lg font-headline-lg text-error">124</div>
+<div class="text-label-md font-label-md text-error bg-error-container px-1.5 py-0.5 rounded mb-1">+12</div>
+</div>
+</div>
+<!-- Time -->
+<div class="bg-surface-container-lowest border border-outline-variant p-md rounded-xl">
+<div class="text-label-md font-label-md text-secondary mb-xs flex items-center gap-xs">
+<span class="material-symbols-outlined text-[16px]">timer</span> 总耗时
+        </div>
+<div class="text-headline-lg font-headline-lg text-on-surface">24m 15s</div>
+</div>
+<!-- Coverage -->
+<div class="bg-surface-container-lowest border border-outline-variant p-md rounded-xl">
+<div class="text-label-md font-label-md text-secondary mb-xs flex items-center gap-xs">
+<span class="material-symbols-outlined text-[16px]">radar</span> 业务覆盖率
+        </div>
+<div class="flex items-end gap-sm">
+<div class="text-headline-lg font-headline-lg text-on-surface">94.5%</div>
+<div class="text-label-md font-label-md text-secondary mb-1">稳健</div>
+</div>
+</div>
+</div>
+<!-- Middle Section: Analysis & Charts -->
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-lg mb-xl">
+<!-- Failure Clustering (AI Insight) -->
+<div class="border border-outline-variant rounded-xl bg-surface-container-lowest flex flex-col">
+<div class="p-md border-b border-outline-variant flex items-center gap-xs">
+<span class="material-symbols-outlined text-primary" style="font-variation-settings: 'FILL' 1;">psychology</span>
+<h3 class="text-title-md font-title-md">失败聚类分析</h3>
+</div>
+<div class="p-md flex-1 overflow-y-auto">
+<ul class="space-y-md">
+<li class="">
+<div class="flex justify-between items-center mb-xs">
+<span class="text-label-md font-label-md text-on-surface">网络抖动 / 超时 (Gateway)</span>
+<span class="text-label-md font-label-md text-error font-bold">74 个</span>
+</div>
+<div class="w-full bg-surface-variant rounded-full h-2">
+<div class="bg-error h-2 rounded-full" style="width: 60%"></div>
+</div>
+</li>
+<li class="">
+<div class="flex justify-between items-center mb-xs">
+<span class="text-label-md font-label-md text-on-surface">并发数据一致性 (Redis 锁)</span>
+<span class="text-label-md font-label-md text-error font-bold">35 个</span>
+</div>
+<div class="w-full bg-surface-variant rounded-full h-2">
+<div class="bg-error h-2 rounded-full" style="width: 28%"></div>
+</div>
+</li>
+<li class="">
+<div class="flex justify-between items-center mb-xs">
+<span class="text-label-md font-label-md text-on-surface">断言不匹配 (UI 变更)</span>
+<span class="text-label-md font-label-md text-error font-bold">15 个</span>
+</div>
+<div class="w-full bg-surface-variant rounded-full h-2">
+<div class="bg-error h-2 rounded-full" style="width: 12%"></div>
+</div>
+</li>
+</ul>
+<p class="text-body-sm font-body-sm text-secondary mt-md bg-surface-container-low p-sm rounded border border-outline-variant/50">
+                AI 提示: 超过一半的失败归因于 <code>gateway-01</code> 的间歇性延迟。建议检查网关节点的 CPU 负载和网络连接数。
+            </p>
+</div>
+</div>
+<!-- Slowest Cases Ranking -->
+<div class="border border-outline-variant rounded-xl bg-surface-container-lowest flex flex-col">
+<div class="p-md border-b border-outline-variant flex items-center gap-xs">
+<span class="material-symbols-outlined text-secondary">hourglass_bottom</span>
+<h3 class="text-title-md font-title-md">最慢用例排行 (Top 5)</h3>
+</div>
+<div class="p-0 flex-1 overflow-y-auto">
+<table class="w-full text-left border-collapse">
+<tbody class="divide-y divide-outline-variant">
+<tr class="hover:bg-surface-container-low">
+<td class="p-sm text-body-sm font-code-md truncate max-w-[150px]">TC-331: 并发减库存测试</td>
+<td class="p-sm text-right text-label-md text-error">5.4s</td>
+</tr>
+<tr class="hover:bg-surface-container-low">
+<td class="p-sm text-body-sm font-code-md truncate max-w-[150px]">TC-145: 订单跨域支付</td>
+<td class="p-sm text-right text-label-md text-error">2.1s</td>
+</tr>
+<tr class="hover:bg-surface-container-low">
+<td class="p-sm text-body-sm font-code-md truncate max-w-[150px]">TC-890: 批量导出账单</td>
+<td class="p-sm text-right text-label-md text-secondary">1.8s</td>
+</tr>
+<tr class="hover:bg-surface-container-low">
+<td class="p-sm text-body-sm font-code-md truncate max-w-[150px]">TC-201: 用户权限树重建</td>
+<td class="p-sm text-right text-label-md text-secondary">1.5s</td>
+</tr>
+<tr class="hover:bg-surface-container-low">
+<td class="p-sm text-body-sm font-code-md truncate max-w-[150px]">TC-512: 复杂促销满减结算</td>
+<td class="p-sm text-right text-label-md text-secondary">1.4s</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+<!-- Coverage Heatmap -->
+<div class="border border-outline-variant rounded-xl bg-surface-container-lowest flex flex-col">
+<div class="p-md border-b border-outline-variant flex items-center justify-between">
+<div class="flex items-center gap-xs">
+<span class="material-symbols-outlined text-secondary">grid_view</span>
+<h3 class="text-title-md font-title-md">模块覆盖率</h3>
+</div>
+<span class="text-label-sm text-secondary">按业务域划分</span>
+</div>
+<div class="p-md flex-1 flex flex-col justify-center gap-sm">
+<!-- Simplified Heatmap blocks -->
+<div class="grid grid-cols-4 gap-xs h-32">
+<div class="bg-[#10b981] heatmap-cell rounded-sm flex items-end p-1 text-[10px] text-white font-medium" title="用户域: 98%">用户</div>
+<div class="bg-[#10b981] heatmap-cell rounded-sm flex items-end p-1 text-[10px] text-white font-medium" title="商品域: 92%">商品</div>
+<div class="bg-[#f87171] heatmap-cell rounded-sm flex items-end p-1 text-[10px] text-white font-medium col-span-2 row-span-2" title="交易域: 75% (含大量失败)">交易</div>
+<div class="bg-[#eab308] heatmap-cell rounded-sm flex items-end p-1 text-[10px] text-on-surface font-medium" title="营销域: 88%">营销</div>
+<div class="bg-[#15803d] heatmap-cell rounded-sm flex items-end p-1 text-[10px] text-white font-medium" title="基础域: 99%">基础</div>
+<div class="bg-[#ef4444] heatmap-cell rounded-sm flex items-end p-1 text-[10px] text-white font-medium col-span-2" title="库存域: 60%">库存</div>
+<div class="bg-[#22c55e] heatmap-cell rounded-sm flex items-end p-1 text-[10px] text-white font-medium" title="客服域: 95%">客服</div>
+<div class="bg-[#16a34a] heatmap-cell rounded-sm flex items-end p-1 text-[10px] text-white font-medium" title="风控域: 97%">风控</div>
+</div>
+<div class="flex justify-between text-label-sm text-secondary mt-xs">
+<span class="">低覆盖/失败</span>
+<div class="flex w-24 h-2 rounded overflow-hidden">
+<div class="flex-1 bg-[#ef4444]"></div>
+<div class="flex-1 bg-[#eab308]"></div>
+<div class="flex-1 bg-[#22c55e]"></div>
+<div class="flex-1 bg-[#15803d]"></div>
+</div>
+<span class="">高覆盖/稳定</span>
+</div>
+</div>
+</div>
+</div>
+<!-- Bottom Section: Root Cause Summary & Actionable Suggestions -->
+<div class="border border-outline-variant rounded-xl bg-surface-container-lowest relative overflow-hidden">
+<div class="p-lg border-b border-outline-variant flex flex-col gap-xs">
+<h2 class="text-headline-md font-headline-md flex items-center gap-xs">
+<span class="material-symbols-outlined text-primary" style="font-variation-settings: 'FILL' 1;">auto_fix_high</span>
+            AI 根因分析与行动建议
+        </h2>
+<p class="text-body-sm text-secondary">基于本次回归测试失败模式的自动化深度分析，生成的修复方案推荐。</p>
+</div>
+<div class="p-lg grid grid-cols-1 md:grid-cols-2 gap-xl">
+<!-- Issue 1 -->
+<div class="space-y-sm">
+<div class="flex items-start gap-sm">
+<span class="w-6 h-6 rounded-full bg-error-container text-error flex items-center justify-center font-bold text-label-sm flex-shrink-0 mt-0.5">1</span>
+<div>
+<h4 class="text-title-md font-title-md text-on-surface">网关层 Checkout 接口超时</h4>
+<p class="text-body-md text-secondary mt-xs mb-sm">74 个交易类用例因等待 <code>/api/v2/checkout</code> 响应超过 3000ms 失败。追踪监控发现底层账务服务 GC 停顿时间变长。</p>
+<div class="bg-surface-container p-sm rounded border border-outline-variant text-body-sm">
+<strong class="text-on-surface">建议操作:</strong>
+<ul class="list-disc list-inside mt-xs text-secondary">
+<li class="">短期: 将测试环境网关超时阈值临时调整至 5000ms，以绕过环境偶发性能波动。</li>
+<li class="">长期: 提请 SRE 团队排查 <code>billing-service</code> 的 JVM 内存配置。</li>
+</ul>
+</div>
+</div>
+</div>
+<button class="ml-10 py-1.5 px-sm border border-outline-variant rounded text-label-md hover:bg-surface-container-low transition-colors text-primary flex items-center gap-xs">
+<span class="material-symbols-outlined text-[16px]">build</span>
+                自动应用超时变更 (测试配置)
+            </button>
+</div>
+<!-- Issue 2 -->
+<div class="space-y-sm">
+<div class="flex items-start gap-sm">
+<span class="w-6 h-6 rounded-full bg-error-container text-error flex items-center justify-center font-bold text-label-sm flex-shrink-0 mt-0.5">2</span>
+<div>
+<h4 class="text-title-md font-title-md text-on-surface">Redis 分布式锁失效导致超卖</h4>
+<p class="text-body-md text-secondary mt-xs mb-sm">并发库存扣减测试 (TC-331等) 中，检测到 35 次库存负数断言失败。初步定位为新版本 <code>InventoryLock</code> 类的锁释放逻辑存在竞态条件。</p>
+<div class="bg-surface-container p-sm rounded border border-outline-variant text-body-sm">
+<strong class="text-on-surface">建议操作:</strong>
+<ul class="list-disc list-inside mt-xs text-secondary">
+<li class="">回滚 <code>InventoryLock</code> 相关的最近一次 Commit <code>#a8f9c21</code>。</li>
+<li class="">为该模块单独增加基于 Lua 脚本的原子操作测试用例。</li>
+</ul>
+</div>
+</div>
+</div>
+<button class="ml-10 py-1.5 px-sm border border-outline-variant rounded text-label-md hover:bg-surface-container-low transition-colors text-primary flex items-center gap-xs">
+<span class="material-symbols-outlined text-[16px]">bug_report</span>
+                一键创建 Jira 缺陷任务
+            </button>
+</div>
+</div>
+</div>
+</main>
+<script>
+        // Simple interactivity for demonstration
+        document.querySelectorAll('.heatmap-cell').forEach(cell => {
+            cell.addEventListener('click', () => {
+                // visual feedback only
+                cell.style.transform = 'scale(0.95)';
+                setTimeout(() => {
+                    cell.style.transform = '';
+                }, 100);
+            });
+        });
+    </script>
+
+
+</body></html>

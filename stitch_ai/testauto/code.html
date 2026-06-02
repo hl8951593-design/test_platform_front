@@ -1,0 +1,385 @@
+<!DOCTYPE html><html class="light" lang="zh-CN"><head>
+<meta charset="utf-8">
+<meta content="width=device-width, initial-scale=1.0" name="viewport">
+<title>Visual Orchestration - TestAuto</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&amp;family=JetBrains+Mono:wght@400&amp;display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet">
+<script id="tailwind-config">
+        tailwind.config = {
+          darkMode: "class",
+          theme: {
+            extend: {
+              "colors": {
+                      "tertiary-fixed": "#fcdeb5",
+                      "on-primary-fixed": "#131b2e",
+                      "on-tertiary-container": "#98805d",
+                      "tertiary-fixed-dim": "#dec29a",
+                      "on-primary-container": "#7c839b",
+                      "inverse-on-surface": "#f3f0f2",
+                      "surface-container-high": "#eae7e9",
+                      "secondary-fixed": "#e1e2ed",
+                      "on-primary": "#ffffff",
+                      "inverse-primary": "#bec6e0",
+                      "surface": "#fcf8fa",
+                      "tertiary": "#000000",
+                      "surface-container-low": "#f6f3f5",
+                      "primary-fixed-dim": "#bec6e0",
+                      "on-tertiary-fixed-variant": "#574425",
+                      "on-surface-variant": "#45464d",
+                      "primary": "#000000",
+                      "surface-container": "#f0edef",
+                      "surface-dim": "#dcd9db",
+                      "surface-container-highest": "#e4e2e4",
+                      "inverse-surface": "#303032",
+                      "on-secondary-container": "#60626c",
+                      "surface-bright": "#fcf8fa",
+                      "secondary-container": "#dedfeb",
+                      "on-primary-fixed-variant": "#3f465c",
+                      "on-secondary": "#ffffff",
+                      "on-secondary-fixed": "#191b24",
+                      "on-surface": "#1b1b1d",
+                      "on-error": "#ffffff",
+                      "on-error-container": "#93000a",
+                      "surface-variant": "#e4e2e4",
+                      "surface-tint": "#565e74",
+                      "secondary": "#5c5e68",
+                      "primary-fixed": "#dae2fd",
+                      "outline-variant": "#c6c6cd",
+                      "on-secondary-fixed-variant": "#444650",
+                      "on-tertiary": "#ffffff",
+                      "surface-container-lowest": "#ffffff",
+                      "error-container": "#ffdad6",
+                      "error": "#ba1a1a",
+                      "secondary-fixed-dim": "#c4c6d1",
+                      "on-tertiary-fixed": "#271901",
+                      "on-background": "#1b1b1d",
+                      "primary-container": "#131b2e",
+                      "tertiary-container": "#271901",
+                      "outline": "#76777d",
+                      "background": "#fcf8fa"
+              },
+              "borderRadius": {
+                      "DEFAULT": "0.125rem",
+                      "lg": "0.25rem",
+                      "xl": "0.5rem",
+                      "full": "0.75rem"
+              },
+              "spacing": {
+                      "sm": "8px",
+                      "base": "8px",
+                      "xl": "32px",
+                      "xs": "4px",
+                      "sidebar_collapsed": "64px",
+                      "md": "16px",
+                      "toolbar_height": "56px",
+                      "sidebar_width": "240px",
+                      "lg": "24px"
+              },
+              "fontFamily": {
+                      "title-md": ["Inter"],
+                      "headline-md": ["Inter"],
+                      "body-sm": ["Inter"],
+                      "headline-lg": ["Inter"],
+                      "display-sm": ["Inter"],
+                      "title-lg": ["Inter"],
+                      "label-md": ["Inter"],
+                      "code-md": ["JetBrains Mono"],
+                      "body-md": ["Inter"],
+                      "body-lg": ["Inter"]
+              },
+              "fontSize": {
+                      "title-md": ["16px", {"lineHeight": "24px", "fontWeight": "600"}],
+                      "headline-md": ["20px", {"lineHeight": "28px", "fontWeight": "600"}],
+                      "body-sm": ["12px", {"lineHeight": "18px", "fontWeight": "400"}],
+                      "headline-lg": ["24px", {"lineHeight": "32px", "letterSpacing": "-0.01em", "fontWeight": "600"}],
+                      "display-sm": ["30px", {"lineHeight": "38px", "letterSpacing": "-0.02em", "fontWeight": "700"}],
+                      "title-lg": ["18px", {"lineHeight": "26px", "fontWeight": "600"}],
+                      "label-md": ["12px", {"lineHeight": "16px", "letterSpacing": "0.05em", "fontWeight": "600"}],
+                      "code-md": ["13px", {"lineHeight": "20px", "fontWeight": "400"}],
+                      "body-md": ["14px", {"lineHeight": "20px", "fontWeight": "400"}],
+                      "body-lg": ["16px", {"lineHeight": "24px", "fontWeight": "400"}]
+              }
+            }
+          }
+        }
+    </script>
+<style>
+        .grid-bg {
+            background-image: radial-gradient(circle, #e2e8f0 1px, transparent 1px);
+            background-size: 24px 24px;
+        }
+        .canvas-node {
+            transition: all 0.2s ease;
+        }
+        .canvas-node:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+        }
+        .custom-scrollbar::-webkit-scrollbar {
+            width: 4px;
+            height: 4px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: #c6c6cd;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body class="bg-background text-on-background font-body-md text-body-md h-screen w-screen overflow-hidden flex selection:bg-primary-fixed selection:text-on-primary-fixed">
+<!-- SideNavBar -->
+<nav class="bg-primary-container text-on-primary-fixed fixed left-0 top-0 h-full w-sidebar_width border-r border-outline-variant flex flex-col py-md px-sm z-50">
+<div class="flex items-center gap-sm mb-xl px-sm">
+<div class="w-8 h-8 rounded-DEFAULT bg-primary flex items-center justify-center text-on-primary font-bold">T</div>
+<div>
+<div class="font-headline-md text-headline-md font-bold text-on-primary">TestAuto</div>
+<div class="font-body-sm text-body-sm text-on-primary-container">Enterprise Engine</div>
+</div>
+</div>
+<div class="flex flex-col gap-xs flex-1 overflow-y-auto custom-scrollbar"><a class="flex items-center gap-sm px-md py-sm rounded-DEFAULT text-on-primary-container hover:bg-on-primary-fixed-variant transition-colors duration-150" href="#"><span class="material-symbols-outlined text-[20px]">dashboard</span><span class="">工作台</span></a><a class="flex items-center gap-sm px-md py-sm rounded-DEFAULT text-on-primary-container hover:bg-on-primary-fixed-variant transition-colors duration-150" href="#"><span class="material-symbols-outlined text-[20px]">folder</span><span class="">项目管理</span></a><a class="flex items-center gap-sm px-md py-sm rounded-DEFAULT text-on-primary-container hover:bg-on-primary-fixed-variant transition-colors duration-150" href="#"><span class="material-symbols-outlined text-[20px]">assignment</span><span class="">测试计划</span></a><a class="flex items-center gap-sm px-md py-sm rounded-DEFAULT bg-secondary-container text-on-secondary-container font-title-md transition-colors duration-150" href="#"><span class="material-symbols-outlined text-[20px]" style="font-variation-settings: 'FILL' 1;">visibility</span><span class="">可视化编排</span></a><a class="flex items-center gap-sm px-md py-sm rounded-DEFAULT text-on-primary-container hover:bg-on-primary-fixed-variant transition-colors duration-150" href="#"><span class="material-symbols-outlined text-[20px]">account_tree</span><span class="">场景组合</span></a><a class="flex items-center gap-sm px-md py-sm rounded-DEFAULT text-on-primary-container hover:bg-on-primary-fixed-variant transition-colors duration-150" href="#"><span class="material-symbols-outlined text-[20px]">api</span><span class="">接口测试</span></a><a class="flex items-center gap-sm px-md py-sm rounded-DEFAULT text-on-primary-container hover:bg-on-primary-fixed-variant transition-colors duration-150" href="#"><span class="material-symbols-outlined text-[20px]">play_circle</span><span class="">执行中心</span></a><a class="flex items-center gap-sm px-md py-sm rounded-DEFAULT text-on-primary-container hover:bg-on-primary-fixed-variant transition-colors duration-150" href="#"><span class="material-symbols-outlined text-[20px]">bar_chart</span><span class="">测试报告</span></a><a class="flex items-center gap-sm px-md py-sm rounded-DEFAULT text-on-primary-container hover:bg-on-primary-fixed-variant transition-colors duration-150" href="#"><span class="material-symbols-outlined text-[20px]">cloud_done</span><span class="">环境配置</span></a><a class="flex items-center gap-sm px-md py-sm rounded-DEFAULT text-on-primary-container hover:bg-on-primary-fixed-variant transition-colors duration-150" href="#"><span class="material-symbols-outlined text-[20px]">settings</span><span class="">系统设置</span></a></div>
+</nav>
+<!-- TopNavBar -->
+<header class="bg-surface text-primary font-title-md text-title-md fixed top-0 right-0 left-sidebar_width h-toolbar_height border-b border-outline-variant flex items-center justify-between px-lg z-40">
+<div class="flex items-center gap-md">
+<div class="font-title-lg text-title-lg font-bold text-primary">TestAuto</div>
+<div class="h-4 w-px bg-outline-variant"></div>
+<div class="text-on-surface-variant text-body-sm font-body-sm">Global Environment: STAGE-A</div>
+</div>
+<div class="flex flex-1 max-w-md mx-xl">
+<div class="relative w-full">
+<span class="material-symbols-outlined absolute left-sm top-1/2 -translate-y-1/2 text-on-surface-variant text-[18px]">search</span>
+<input class="w-full bg-surface-container-low border border-outline-variant rounded-DEFAULT pl-8 pr-sm py-xs text-body-sm focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary" placeholder="Search flows, nodes, or APIs..." type="text">
+</div>
+</div>
+<div class="flex items-center gap-md text-on-surface-variant">
+<button class="hover:text-primary transition-colors flex items-center justify-center w-8 h-8 rounded-DEFAULT hover:bg-surface-variant">
+<span class="material-symbols-outlined">notifications</span>
+</button>
+<button class="hover:text-primary transition-colors flex items-center justify-center w-8 h-8 rounded-DEFAULT hover:bg-surface-variant">
+<span class="material-symbols-outlined">help_outline</span>
+</button>
+<div class="w-8 h-8 rounded-full bg-secondary-container flex items-center justify-center border border-outline-variant overflow-hidden cursor-pointer">
+<span class="material-symbols-outlined text-on-secondary-container text-[20px]">person</span>
+</div>
+</div>
+</header>
+<!-- Main Content Area -->
+<main class="ml-sidebar_width mt-toolbar_height h-[calc(100vh-56px)] w-full flex flex-col relative bg-surface-container-low">
+<!-- Header Toolbar -->
+<div class="h-[72px] bg-surface border-b border-outline-variant flex items-center justify-between px-lg shrink-0">
+<div>
+<div class="flex items-center gap-sm">
+<h1 class="font-headline-md text-headline-md text-on-surface">可视化编排</h1>
+<span class="px-2 py-0.5 rounded-DEFAULT bg-surface-variant text-on-surface-variant font-label-md text-label-md border border-outline-variant">草稿</span>
+</div>
+<p class="font-body-sm text-body-sm text-on-surface-variant mt-0.5">通过拖拽测试用例与断言节点，组合可执行的自动化测试流程</p>
+</div>
+<div class="flex items-center gap-sm">
+<button class="px-md py-sm rounded-DEFAULT text-on-surface-variant hover:bg-surface-variant font-title-md text-title-md transition-colors text-sm">发布到计划</button>
+<button class="px-md py-sm rounded-DEFAULT border border-outline-variant text-primary hover:bg-surface-variant font-title-md text-title-md transition-colors text-sm bg-surface">试运行</button>
+<button class="px-md py-sm rounded-DEFAULT bg-primary text-on-primary font-title-md text-title-md transition-colors text-sm hover:bg-tertiary">保存流程</button>
+</div>
+</div>
+<!-- Three Column Layout -->
+<div class="flex flex-1 overflow-hidden">
+<!-- Left Panel: Case Library -->
+<div class="w-[280px] bg-surface border-r border-outline-variant flex flex-col shrink-0">
+<div class="p-sm border-b border-outline-variant">
+<div class="relative w-full">
+<span class="material-symbols-outlined absolute left-sm top-1/2 -translate-y-1/2 text-on-surface-variant text-[16px]">search</span>
+<input class="w-full bg-surface-container-lowest border border-outline-variant rounded-DEFAULT pl-7 pr-sm py-1 text-body-sm focus:outline-none focus:border-primary" placeholder="过滤节点..." type="text">
+</div>
+</div>
+<div class="flex px-sm pt-sm gap-sm border-b border-outline-variant overflow-x-auto custom-scrollbar shrink-0">
+<button class="pb-1 border-b-2 border-primary text-primary font-title-md text-[13px] whitespace-nowrap">测试用例</button>
+<button class="pb-1 border-b-2 border-transparent text-on-surface-variant hover:text-primary font-body-md text-[13px] whitespace-nowrap">接口用例</button>
+<button class="pb-1 border-b-2 border-transparent text-on-surface-variant hover:text-primary font-body-md text-[13px] whitespace-nowrap">前置步骤</button>
+<button class="pb-1 border-b-2 border-transparent text-on-surface-variant hover:text-primary font-body-md text-[13px] whitespace-nowrap">断言</button>
+</div>
+<div class="flex-1 overflow-y-auto p-sm flex flex-col gap-xs custom-scrollbar">
+<!-- Draggable Item -->
+<div class="bg-surface-container-lowest border border-outline-variant rounded-DEFAULT p-sm cursor-grab hover:border-primary transition-colors flex items-start gap-sm">
+<span class="material-symbols-outlined text-[18px] text-on-surface-variant mt-0.5">login</span>
+<div class="flex-1 min-w-0">
+<div class="font-title-md text-title-md text-[13px] truncate">登录成功 TC-AUTH-001</div>
+<div class="flex items-center justify-between mt-1">
+<span class="font-body-sm text-[11px] text-on-surface-variant">Auth Module</span>
+<span class="font-code-md text-[11px] text-[#059669]">98% Pass</span>
+</div>
+</div>
+</div>
+<!-- Draggable Item -->
+<div class="bg-surface-container-lowest border border-outline-variant rounded-DEFAULT p-sm cursor-grab hover:border-primary transition-colors flex items-start gap-sm">
+<span class="material-symbols-outlined text-[18px] text-on-surface-variant mt-0.5">shopping_cart</span>
+<div class="flex-1 min-w-0">
+<div class="font-title-md text-title-md text-[13px] truncate">创建订单 TC-ORD-102</div>
+<div class="flex items-center justify-between mt-1">
+<span class="font-body-sm text-[11px] text-on-surface-variant">Order Flow</span>
+<span class="font-code-md text-[11px] text-[#059669]">95% Pass</span>
+</div>
+</div>
+</div>
+</div>
+<div class="p-sm border-t border-outline-variant bg-surface-container-low font-body-sm text-[11px] text-on-surface-variant flex justify-between items-center">
+<span class="">已选 12 个节点</span>
+<span class="">模板 8 个</span>
+</div>
+</div>
+<!-- Center Canvas: Flow Editor -->
+<div class="flex-1 relative flex flex-col bg-surface-container-low overflow-hidden">
+<!-- Canvas Toolbar -->
+<div class="absolute top-sm left-1/2 -translate-x-1/2 bg-surface border border-outline-variant rounded-DEFAULT shadow-sm flex items-center p-1 z-10">
+<button class="w-8 h-8 rounded flex items-center justify-center text-primary bg-surface-variant"><span class="material-symbols-outlined text-[18px]">near_me</span></button>
+<button class="w-8 h-8 rounded flex items-center justify-center text-on-surface-variant hover:bg-surface-variant"><span class="material-symbols-outlined text-[18px]">pan_tool</span></button>
+<button class="w-8 h-8 rounded flex items-center justify-center text-on-surface-variant hover:bg-surface-variant"><span class="material-symbols-outlined text-[18px]">link</span></button>
+<div class="w-px h-4 bg-outline-variant mx-1"></div>
+<button class="w-8 h-8 rounded flex items-center justify-center text-on-surface-variant hover:bg-surface-variant"><span class="material-symbols-outlined text-[18px]">undo</span></button>
+<button class="w-8 h-8 rounded flex items-center justify-center text-on-surface-variant hover:bg-surface-variant"><span class="material-symbols-outlined text-[18px]">redo</span></button>
+<div class="w-px h-4 bg-outline-variant mx-1"></div>
+<span class="font-code-md text-[12px] px-2 text-on-surface-variant">82%</span>
+<button class="w-8 h-8 rounded flex items-center justify-center text-on-surface-variant hover:bg-surface-variant"><span class="material-symbols-outlined text-[18px]">zoom_in</span></button>
+<button class="w-8 h-8 rounded flex items-center justify-center text-on-surface-variant hover:bg-surface-variant"><span class="material-symbols-outlined text-[18px]">zoom_out</span></button>
+<div class="w-px h-4 bg-outline-variant mx-1"></div>
+<button class="w-8 h-8 rounded flex items-center justify-center text-on-surface-variant hover:bg-surface-variant" title="Auto Layout"><span class="material-symbols-outlined text-[18px]">schema</span></button>
+<button class="px-2 h-8 rounded flex items-center justify-center text-primary hover:bg-surface-variant text-[12px] font-title-md ml-1"><span class="material-symbols-outlined text-[16px] mr-1">play_arrow</span>Run Sel</button>
+</div>
+<!-- Canvas Grid Area (Mocked Nodes) -->
+<div class="flex-1 w-full h-full grid-bg relative overflow-auto custom-scrollbar p-xl">
+<!-- SVG Lines (Mocked via absolute positioning for simplicity) -->
+<svg class="absolute top-0 left-0 w-full h-full pointer-events-none" style="z-index: 0;">
+<path d="M 120 100 L 220 100" fill="none" marker-end="url(#arrow)" stroke="#76777d" stroke-width="2"></path>
+<path d="M 380 100 L 480 100" fill="none" marker-end="url(#arrow)" stroke="#76777d" stroke-width="2"></path>
+<path d="M 640 100 L 740 100" fill="none" marker-end="url(#arrow-blue)" stroke="#0ea5e9" stroke-width="2"></path>
+<defs>
+<marker id="arrow" markerHeight="6" markerWidth="6" orient="auto-start-reverse" refX="5" refY="5" viewBox="0 0 10 10">
+<path d="M 0 0 L 10 5 L 0 10 z" fill="#76777d"></path>
+</marker>
+<marker id="arrow-blue" markerHeight="6" markerWidth="6" orient="auto-start-reverse" refX="5" refY="5" viewBox="0 0 10 10">
+<path d="M 0 0 L 10 5 L 0 10 z" fill="#0ea5e9"></path>
+</marker>
+</defs>
+</svg>
+<!-- Node: Start -->
+<div class="absolute top-[70px] left-[40px] w-[80px] h-[60px] bg-surface border border-outline-variant rounded-full flex flex-col items-center justify-center canvas-node z-10 shadow-sm">
+<span class="font-title-md text-[13px] text-on-surface">Start</span>
+</div>
+<!-- Node: Login -->
+<div class="absolute top-[70px] left-[220px] w-[160px] bg-surface border border-outline-variant rounded-DEFAULT canvas-node z-10 shadow-sm border-l-4 border-l-[#059669]">
+<div class="p-2 border-b border-outline-variant flex items-center justify-between bg-surface-container-lowest rounded-t-DEFAULT">
+<div class="flex items-center gap-1">
+<span class="material-symbols-outlined text-[14px] text-on-surface-variant">login</span>
+<span class="font-title-md text-[12px] truncate">Login</span>
+</div>
+<span class="w-2 h-2 rounded-full bg-[#059669]"></span>
+</div>
+<div class="p-2 bg-surface rounded-b-DEFAULT">
+<div class="font-code-md text-[10px] text-on-surface-variant truncate">TC-AUTH-001</div>
+</div>
+</div>
+<!-- Node: Payment API (Selected) -->
+<div class="absolute top-[70px] left-[480px] w-[160px] bg-surface border-2 border-[#0ea5e9] rounded-DEFAULT canvas-node z-10 shadow-sm ring-2 ring-[#0ea5e9]/20">
+<div class="p-2 border-b border-outline-variant flex items-center justify-between bg-surface-container-lowest rounded-t-DEFAULT">
+<div class="flex items-center gap-1">
+<span class="material-symbols-outlined text-[14px] text-[#0ea5e9]">api</span>
+<span class="font-title-md text-[12px] text-[#0ea5e9] truncate">Payment API</span>
+</div>
+</div>
+<div class="p-2 bg-surface rounded-b-DEFAULT">
+<div class="font-code-md text-[10px] text-on-surface-variant truncate">API-PAY-221</div>
+</div>
+</div>
+<!-- Node: Logic Branch -->
+<div class="absolute top-[70px] left-[740px] w-[140px] h-[60px] bg-surface border border-outline-variant rounded-DEFAULT flex items-center justify-center canvas-node z-10 shadow-sm rotate-45 transform origin-center">
+<span class="font-code-md text-[10px] text-on-surface -rotate-45 block">result == SUCCESS</span>
+</div>
+</div>
+<!-- Canvas Footer -->
+<div class="absolute bottom-0 left-0 w-full h-[32px] bg-surface border-t border-outline-variant flex items-center px-sm gap-md z-10">
+<span class="font-code-md text-[11px] text-on-surface-variant flex items-center gap-1"><span class="material-symbols-outlined text-[14px]">timer</span> Est: 4m 28s</span>
+<div class="w-px h-3 bg-outline-variant"></div>
+<span class="font-code-md text-[11px] text-on-surface-variant">3 Concurrent</span>
+<div class="w-px h-3 bg-outline-variant"></div>
+<span class="font-code-md text-[11px] text-on-surface-variant">11 APIs</span>
+</div>
+</div>
+<!-- Right Panel: Property Panel -->
+<div class="w-[360px] bg-surface border-l border-outline-variant flex flex-col shrink-0">
+<div class="p-md border-b border-outline-variant bg-surface-container-lowest flex items-start justify-between">
+<div>
+<div class="flex items-center gap-2 mb-1">
+<span class="px-1.5 py-0.5 rounded bg-primary-container text-on-primary-container font-code-md text-[10px]">POST</span>
+<h2 class="font-headline-md text-[16px] text-on-surface">支付接口</h2>
+</div>
+<div class="font-code-md text-[11px] text-on-surface-variant">API-PAY-221</div>
+</div>
+<button class="text-on-surface-variant hover:text-primary"><span class="material-symbols-outlined text-[18px]">more_vert</span></button>
+</div>
+<div class="flex px-sm pt-sm gap-md border-b border-outline-variant shrink-0">
+<button class="pb-1 border-b-2 border-primary text-primary font-title-md text-[13px]">配置</button>
+<button class="pb-1 border-b-2 border-transparent text-on-surface-variant hover:text-primary font-body-md text-[13px]">入参</button>
+<button class="pb-1 border-b-2 border-transparent text-on-surface-variant hover:text-primary font-body-md text-[13px]">断言</button>
+<button class="pb-1 border-b-2 border-transparent text-on-surface-variant hover:text-primary font-body-md text-[13px]">依赖</button>
+</div>
+<div class="flex-1 overflow-y-auto p-md flex flex-col gap-md custom-scrollbar bg-surface-container-lowest">
+<!-- Form Group -->
+<div class="flex flex-col gap-1">
+<label class="font-label-md text-on-surface-variant">Timeout (ms)</label>
+<input class="w-full bg-surface border border-outline-variant rounded-DEFAULT px-2 py-1 text-body-sm font-code-md focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary" type="number" value="5000">
+</div>
+<div class="flex gap-md">
+<div class="flex flex-col gap-1 flex-1">
+<label class="font-label-md text-on-surface-variant">Retries</label>
+<input class="w-full bg-surface border border-outline-variant rounded-DEFAULT px-2 py-1 text-body-sm font-code-md focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary" type="number" value="3">
+</div>
+<div class="flex flex-col gap-1 flex-1">
+<label class="font-label-md text-on-surface-variant">Failure Strategy</label>
+<select class="w-full bg-surface border border-outline-variant rounded-DEFAULT px-2 py-1 text-body-sm focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary">
+<option>Halt Flow</option>
+<option>Continue</option>
+</select>
+</div>
+</div>
+<div class="w-full h-px bg-outline-variant my-1"></div>
+<!-- Assertions Section -->
+<div>
+<div class="flex items-center justify-between mb-2">
+<label class="font-label-md text-on-surface">Assertions (3)</label>
+<button class="text-primary hover:bg-surface-variant rounded p-0.5"><span class="material-symbols-outlined text-[16px]">add</span></button>
+</div>
+<div class="flex flex-col gap-2">
+<div class="flex items-center gap-2 bg-surface border border-outline-variant rounded p-1.5">
+<span class="font-code-md text-[11px] text-on-surface flex-1">status == 200</span>
+<span class="material-symbols-outlined text-[14px] text-on-surface-variant cursor-pointer hover:text-error">delete</span>
+</div>
+<div class="flex items-center gap-2 bg-surface border border-outline-variant rounded p-1.5">
+<span class="font-code-md text-[11px] text-on-surface flex-1">body.code == 'SUCCESS'</span>
+<span class="material-symbols-outlined text-[14px] text-on-surface-variant cursor-pointer hover:text-error">delete</span>
+</div>
+<div class="flex items-center gap-2 bg-surface border border-outline-variant rounded p-1.5">
+<span class="font-code-md text-[11px] text-on-surface flex-1">responseTime &lt; 800</span>
+<span class="material-symbols-outlined text-[14px] text-on-surface-variant cursor-pointer hover:text-error">delete</span>
+</div>
+</div>
+</div>
+<!-- AI Insight Card -->
+<div class="mt-auto bg-[#f8fafc] border border-[#e2e8f0] rounded-DEFAULT p-3 shadow-[0_2px_4px_rgba(0,0,0,0.02)]">
+<div class="flex items-center gap-1.5 mb-2">
+<span class="material-symbols-outlined text-[16px] text-[#6366f1]">psychology</span>
+<span class="font-title-md text-[12px] text-[#1e293b]">AI Insight</span>
+</div>
+<p class="font-body-sm text-[11px] text-[#475569] leading-relaxed">
+                            Consider adding idempotency key mapping for retries. Missing exception branch for 'INSUFFICIENT_FUNDS'.
+                        </p>
+<button class="mt-2 text-[#6366f1] font-title-md text-[11px] hover:underline">Apply Suggestions</button>
+</div>
+</div>
+</div>
+</div>
+</main>
+
+
+</body></html>

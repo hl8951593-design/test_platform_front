@@ -1,0 +1,520 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en" style=""><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>测试场景编排 - TestAuto Platform</title>
+<!-- Material Symbols -->
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<!-- Google Fonts: Inter & JetBrains Mono -->
+<link href="https://fonts.googleapis.com" rel="preconnect"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet"/>
+<!-- Tailwind CSS -->
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<!-- Tailwind Config -->
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "surface-container-low": "#f6f3f5",
+                        "outline": "#76777d",
+                        "on-background": "#1b1b1d",
+                        "tertiary-container": "#271901",
+                        "secondary-fixed": "#e1e2ed",
+                        "on-tertiary-container": "#98805d",
+                        "outline-variant": "#c6c6cd",
+                        "on-error": "#ffffff",
+                        "error": "#ba1a1a",
+                        "on-secondary-fixed": "#191b24",
+                        "on-error-container": "#93000a",
+                        "surface-container-high": "#eae7e9",
+                        "error-container": "#ffdad6",
+                        "on-tertiary": "#ffffff",
+                        "surface-container-highest": "#e4e2e4",
+                        "on-secondary": "#ffffff",
+                        "secondary-fixed-dim": "#c4c6d1",
+                        "surface-container-lowest": "#ffffff",
+                        "secondary-container": "#dedfeb",
+                        "tertiary": "#000000",
+                        "secondary": "#5c5e68",
+                        "primary-container": "#131b2e",
+                        "on-primary-container": "#7c839b",
+                        "on-primary": "#ffffff",
+                        "tertiary-fixed-dim": "#dec29a",
+                        "primary-fixed": "#dae2fd",
+                        "inverse-surface": "#303032",
+                        "inverse-on-surface": "#f3f0f2",
+                        "on-primary-fixed-variant": "#3f465c",
+                        "surface-container": "#f0edef",
+                        "surface": "#fcf8fa",
+                        "tertiary-fixed": "#fcdeb5",
+                        "surface-tint": "#565e74",
+                        "on-secondary-container": "#60626c",
+                        "surface-bright": "#fcf8fa",
+                        "on-tertiary-fixed-variant": "#574425",
+                        "on-surface": "#1b1b1d",
+                        "on-surface-variant": "#45464d",
+                        "on-primary-fixed": "#131b2e",
+                        "on-tertiary-fixed": "#271901",
+                        "surface-variant": "#e4e2e4",
+                        "primary-fixed-dim": "#bec6e0",
+                        "on-secondary-fixed-variant": "#444650",
+                        "surface-dim": "#dcd9db",
+                        "inverse-primary": "#bec6e0",
+                        "primary": "#000000",
+                        "background": "#fcf8fa"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.125rem",
+                        "lg": "0.25rem",
+                        "xl": "0.5rem",
+                        "full": "0.75rem"
+                    },
+                    "spacing": {
+                        "lg": "24px",
+                        "sidebar_width": "240px",
+                        "sm": "8px",
+                        "md": "16px",
+                        "sidebar_collapsed": "64px",
+                        "xs": "4px",
+                        "base": "8px",
+                        "xl": "32px",
+                        "toolbar_height": "56px"
+                    },
+                    "fontFamily": {
+                        "headline-lg": ["Inter"],
+                        "title-md": ["Inter"],
+                        "display-sm": ["Inter"],
+                        "code-md": ["JetBrains Mono"],
+                        "body-lg": ["Inter"],
+                        "body-md": ["Inter"],
+                        "headline-md": ["Inter"],
+                        "body-sm": ["Inter"],
+                        "title-lg": ["Inter"],
+                        "label-md": ["Inter"]
+                    },
+                    "fontSize": {
+                        "headline-lg": ["24px", { "lineHeight": "32px", "letterSpacing": "-0.01em", "fontWeight": "600" }],
+                        "title-md": ["16px", { "lineHeight": "24px", "fontWeight": "600" }],
+                        "display-sm": ["30px", { "lineHeight": "38px", "letterSpacing": "-0.02em", "fontWeight": "700" }],
+                        "code-md": ["13px", { "lineHeight": "20px", "fontWeight": "400" }],
+                        "body-lg": ["16px", { "lineHeight": "24px", "fontWeight": "400" }],
+                        "body-md": ["14px", { "lineHeight": "20px", "fontWeight": "400" }],
+                        "headline-md": ["20px", { "lineHeight": "28px", "fontWeight": "600" }],
+                        "body-sm": ["12px", { "lineHeight": "18px", "fontWeight": "400" }],
+                        "title-lg": ["18px", { "lineHeight": "26px", "fontWeight": "600" }],
+                        "label-md": ["12px", { "lineHeight": "16px", "letterSpacing": "0.05em", "fontWeight": "600" }]
+                    }
+                },
+            },
+        }
+    </script>
+<style>
+        /* Scrollbar styling for a cleaner look */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: var(--tw-colors-surface-variant);
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--tw-colors-outline-variant);
+        }
+    </style>
+</head>
+<body class="bg-background text-on-background font-body-md overflow-hidden">
+<!-- ==========================================
+         SideNavBar Component
+         ========================================== -->
+<nav class="h-screen w-64 fixed left-0 top-0 border-r border-primary-container/20 shadow-none bg-primary-container z-50 flex flex-col justify-between">
+<div class="flex flex-col h-full p-md">
+<!-- Header -->
+<div class="mb-xl px-sm pt-sm">
+<div class="flex items-center gap-sm mb-xs">
+<div class="w-8 h-8 rounded bg-surface-container-lowest flex items-center justify-center text-primary-container">
+<span class="material-symbols-outlined text-[18px]">biotech</span>
+</div>
+<div class="font-headline-md text-headline-md font-bold text-surface-container-lowest">
+                        TestAuto AI
+                    </div>
+</div>
+<div class="font-label-sm text-[12px] text-on-primary-container pl-10">v2.4 Enterprise</div>
+</div>
+<!-- CTA -->
+<button class="mb-lg mx-sm py-sm px-md bg-surface-container-lowest text-primary-container rounded font-label-md text-label-md flex items-center justify-center gap-sm hover:opacity-90 active:scale-95 transform transition-transform">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">add</span>
+                新建项目
+            </button>
+<!-- Navigation Links -->
+<div class="flex-1 overflow-y-auto">
+<ul class="space-y-xs">
+<!-- API Tests -->
+<li class="">
+<a class="flex items-center gap-md px-md py-sm rounded font-label-md text-label-md text-on-primary-container hover:bg-white/5 transition-colors duration-200 active:scale-95 transform transition-transform" href="#"><span class="material-symbols-outlined">api</span>接口测试</a>
+</li>
+<!-- Test Scenes (ACTIVE) -->
+<li class="">
+<a class="flex items-center gap-md px-md py-sm font-label-md text-label-md transition-colors duration-200 active:scale-95 transform transition-transform bg-white/10 text-surface-container-lowest font-bold rounded" href="#"><span class="material-symbols-outlined" style='font-variation-settings: "FILL" 1;'>account_tree</span>测试场景</a>
+</li>
+<!-- Execution -->
+<li class="">
+<a class="flex items-center gap-md px-md py-sm rounded font-label-md text-label-md text-on-primary-container hover:bg-white/5 transition-colors duration-200 active:scale-95 transform transition-transform" href="#"><span class="material-symbols-outlined">play_circle</span>用例执行</a>
+</li>
+<!-- Projects -->
+<li class="">
+<a class="flex items-center gap-md px-md py-sm rounded font-label-md text-label-md text-on-primary-container hover:bg-white/5 transition-colors duration-200 active:scale-95 transform transition-transform" href="#"><span class="material-symbols-outlined">folder_special</span>项目管理</a>
+</li>
+<!-- AI Generation -->
+<li class="">
+<a class="flex items-center gap-md px-md py-sm rounded font-label-md text-label-md text-on-primary-container hover:bg-white/5 transition-colors duration-200 active:scale-95 transform transition-transform" href="#"><span class="material-symbols-outlined">psychology</span>AI 生成</a>
+</li>
+<!-- AI Dashboard -->
+<li class="">
+<a class="flex items-center gap-md px-md py-sm rounded font-label-md text-label-md text-on-primary-container hover:bg-white/5 transition-colors duration-200 active:scale-95 transform transition-transform" href="#"><span class="material-symbols-outlined">insights</span>AI 仪表盘</a>
+</li>
+</ul>
+</div>
+</div>
+</nav>
+<!-- ==========================================
+         TopNavBar Component
+         ========================================== -->
+<header class="fixed top-0 right-0 left-64 h-16 border-b border-outline-variant flat no shadows bg-surface-container-lowest z-40">
+<div class="flex items-center justify-between px-lg w-full h-full">
+<!-- Left: Search & Context -->
+<div class="flex items-center gap-lg flex-1">
+<div class="font-headline-sm text-headline-sm font-bold text-primary-container mr-xl">
+                    TestAuto Platform
+                </div>
+<!-- Search Bar -->
+<div class="relative w-64 max-w-md hidden md:block">
+<span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-outline text-[20px]">search</span>
+<input class="w-full pl-10 pr-4 py-2 bg-surface-container-low rounded border-none focus:ring-1 focus:ring-primary-container focus:bg-surface-container-lowest font-body-sm text-[13px] transition-all duration-300 ease-in-out" placeholder="搜索资源..." type="text"/>
+</div>
+<!-- Navigation Links -->
+<nav class="hidden lg:flex gap-md">
+<a class="font-label-md text-[13px] text-on-surface-variant hover:text-primary-container hover:bg-surface-container-low px-sm py-xs rounded transition-all duration-300 ease-in-out" href="#">最近</a>
+<a class="font-label-md text-[13px] text-on-surface-variant hover:text-primary-container hover:bg-surface-container-low px-sm py-xs rounded transition-all duration-300 ease-in-out" href="#">收藏</a>
+<a class="font-label-md text-[13px] text-on-surface-variant hover:text-primary-container hover:bg-surface-container-low px-sm py-xs rounded transition-all duration-300 ease-in-out" href="#">回收站</a>
+</nav>
+</div>
+<!-- Right: Actions & Profile -->
+<div class="flex items-center gap-md">
+<div class="flex items-center gap-xs">
+<button class="p-2 text-on-surface-variant hover:text-primary-container hover:bg-surface-container-low rounded transition-all duration-300 ease-in-out">
+<span class="material-symbols-outlined">notifications</span>
+</button>
+<button class="p-2 text-on-surface-variant hover:text-primary-container hover:bg-surface-container-low rounded transition-all duration-300 ease-in-out">
+<span class="material-symbols-outlined">settings_suggest</span>
+</button>
+</div>
+<div class="w-px h-8 bg-outline-variant mx-xs"></div>
+<button class="px-md py-sm text-primary-container border border-transparent hover:border-primary-container font-label-md text-label-md hover:bg-surface-container-low rounded transition-all duration-300 ease-in-out">导出报告</button>
+<div class="ml-sm w-9 h-9 rounded overflow-hidden border border-outline-variant cursor-pointer">
+<img alt="QA Engineer Profile" class="w-full h-full object-cover" data-alt="A professional headshot of a confident female software engineer with glasses, smiling slightly, set against a soft, bright, modern office background. Lighting is high-key and natural, complementing the crisp, clean light-mode aesthetic of an enterprise software platform." src="https://lh3.googleusercontent.com/aida-public/AB6AXuBJeCVA43MTK1ljZY687NgzKGlqohav_MpWPPjvIc0vpwrdzXLd09lbDpKbKwDnJ8-zZ0hrxanBxovSVb4j8Q4qx6198kXub-cJdNbolJtaohedDp51StYKxEJZp12upZYskdoEnrFy8uAQhXZfG8g_uAimLB8DtMbEXAzPdXR0kamVhQOT8uOM8Vk9JulVdYttscTdfaaIT13TaKA0eSFXqIHPW0Id5yIw3H4k6t6EhLCHVxkqH394Zb0zsTpKyKr1Boc8hmT9JYg"/>
+</div>
+</div>
+</div>
+</header>
+<!-- ==========================================
+         Main Layout Workspace (Below TopNav, Right of SideNav)
+         ========================================== -->
+<main class="fixed top-16 left-64 right-0 bottom-0 flex bg-surface-container-low">
+<!-- ==========================================
+             Left Panel: API Test Library
+             ========================================== -->
+<aside class="w-80 border-r border-outline-variant bg-surface-container-lowest flex flex-col h-full z-10">
+<div class="p-md border-b border-outline-variant flex items-center justify-between">
+<h2 class="font-headline-sm text-title-md text-on-surface">组件与接口库</h2>
+<button class="text-on-surface-variant hover:text-primary transition-colors">
+<span class="material-symbols-outlined">filter_list</span>
+</button>
+</div>
+<div class="p-md">
+<div class="relative mb-md">
+<span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-outline text-[18px]">search</span>
+<input class="w-full pl-9 pr-3 py-1.5 bg-surface-container-low rounded border border-outline-variant focus:border-primary-container focus:ring-1 focus:ring-primary-container font-body-sm text-[13px] transition-all" placeholder="搜索资源..." type="text"/>
+</div>
+</div>
+<!-- Library Items List -->
+<div class="flex-1 overflow-y-auto p-md pt-0 space-y-md">
+<!-- Category: Auth -->
+<div>
+<div class="flex items-center gap-2 mb-sm text-on-surface-variant border-b border-outline-variant pb-1">
+<span class="material-symbols-outlined text-[16px]">lock</span>
+<h3 class="font-label-sm text-label-md uppercase">认证</h3>
+</div>
+<div class="space-y-1">
+<!-- Draggable Item -->
+<div class="p-2 bg-surface-container-lowest border border-outline-variant rounded cursor-grab hover:border-primary-container transition-all flex items-center gap-3">
+<div class="w-10 h-5 bg-surface-container-highest text-on-surface font-code-md text-[10px] font-bold rounded flex items-center justify-center">POST</div>
+<div class="flex-1 truncate">
+<p class="font-label-md text-[13px] text-on-surface truncate">登录用户</p>
+<p class="font-code-md text-[11px] text-on-surface-variant truncate">/api/v1/auth/login</p>
+</div>
+<span class="material-symbols-outlined text-outline-variant text-[16px]">drag_indicator</span>
+</div>
+<div class="p-2 bg-surface-container-lowest border border-outline-variant rounded cursor-grab hover:border-primary-container transition-all flex items-center gap-3">
+<div class="w-10 h-5 bg-surface-container-highest text-on-surface font-code-md text-[10px] font-bold rounded flex items-center justify-center">POST</div>
+<div class="flex-1 truncate">
+<p class="font-label-md text-[13px] text-on-surface truncate">刷新令牌</p>
+<p class="font-code-md text-[11px] text-on-surface-variant truncate">/api/v1/auth/refresh</p>
+</div>
+<span class="material-symbols-outlined text-outline-variant text-[16px]">drag_indicator</span>
+</div>
+</div>
+</div>
+<!-- Category: Cart -->
+<div>
+<div class="flex items-center gap-2 mb-sm text-on-surface-variant mt-md border-b border-outline-variant pb-1">
+<span class="material-symbols-outlined text-[16px]">shopping_cart</span>
+<h3 class="font-label-sm text-label-md uppercase">购物车</h3>
+</div>
+<div class="space-y-1">
+<div class="p-2 bg-surface-container-lowest border border-outline-variant rounded cursor-grab hover:border-primary-container transition-all flex items-center gap-3">
+<div class="w-10 h-5 bg-surface-container-highest text-on-surface font-code-md text-[10px] font-bold rounded flex items-center justify-center">GET</div>
+<div class="flex-1 truncate">
+<p class="font-label-md text-[13px] text-on-surface truncate">获取购物车</p>
+<p class="font-code-md text-[11px] text-on-surface-variant truncate">/api/v1/cart/{id}</p>
+</div>
+<span class="material-symbols-outlined text-outline-variant text-[16px]">drag_indicator</span>
+</div>
+<div class="p-2 bg-surface-container-lowest border border-outline-variant rounded cursor-grab hover:border-primary-container transition-all flex items-center gap-3">
+<div class="w-10 h-5 bg-surface-container-highest text-on-surface font-code-md text-[10px] font-bold rounded flex items-center justify-center">POST</div>
+<div class="flex-1 truncate">
+<p class="font-label-md text-[13px] text-on-surface truncate">添加商品</p>
+<p class="font-code-md text-[11px] text-on-surface-variant truncate">/api/v1/cart/items</p>
+</div>
+<span class="material-symbols-outlined text-outline-variant text-[16px]">drag_indicator</span>
+</div>
+<div class="p-2 bg-surface-container-lowest border border-outline-variant rounded cursor-grab hover:border-primary-container transition-all flex items-center gap-3">
+<div class="w-10 h-5 bg-error-container text-on-error-container font-code-md text-[10px] font-bold rounded flex items-center justify-center">DEL</div>
+<div class="flex-1 truncate">
+<p class="font-label-md text-[13px] text-on-surface truncate">移除商品</p>
+<p class="font-code-md text-[11px] text-on-surface-variant truncate">/api/v1/cart/items/{id}</p>
+</div>
+<span class="material-symbols-outlined text-outline-variant text-[16px]">drag_indicator</span>
+</div>
+</div>
+</div>
+</div>
+</aside>
+<!-- ==========================================
+             Center Canvas: Flow List
+             ========================================== -->
+<section class="flex-1 flex flex-col relative overflow-hidden bg-surface-container-low">
+<!-- Canvas Toolbar -->
+<div class="h-16 border-b border-outline-variant bg-surface-container-lowest flex items-center justify-between px-lg z-20 absolute top-0 w-full">
+<div class="flex items-center gap-md">
+<h1 class="font-title-md text-title-md text-on-surface">电商结账流程</h1>
+<span class="px-2 py-1 border border-outline-variant text-on-surface-variant rounded font-label-md text-[11px]">草稿</span>
+</div>
+<div class="flex items-center gap-sm">
+<button class="px-md py-1.5 border border-outline-variant text-on-surface hover:bg-surface-container-low rounded font-label-md text-[13px] transition-colors flex items-center gap-2">
+<span class="material-symbols-outlined text-[16px]">settings</span> 全局变量设置
+                    </button>
+<button class="px-md py-1.5 border border-outline-variant text-on-surface hover:bg-surface-container-low rounded font-label-md text-[13px] transition-colors flex items-center gap-2">
+<span class="material-symbols-outlined text-[16px]">save</span> 保存为模板
+                    </button>
+<button class="px-md py-1.5 bg-primary-container text-surface-container-lowest hover:opacity-90 rounded font-label-md text-[13px] transition-all flex items-center gap-2">
+<span class="material-symbols-outlined text-[18px] font-variation-settings-'FILL'-1">play_arrow</span>
+                        立即试运行
+                    </button>
+</div>
+</div>
+<!-- Interactive Canvas Area -->
+<div class="flex-1 w-full h-full absolute inset-0 pt-16 overflow-y-auto pb-32 px-md bg-surface-container-low">
+<!-- Flow List Container -->
+<div class="mt-md max-w-4xl mx-auto flex flex-col gap-2">
+<!-- Step 1: Login -->
+<div class="w-full bg-surface-container-lowest border border-outline-variant rounded p-sm relative group hover:border-primary-container transition-colors cursor-pointer flex flex-col shadow-sm">
+<div class="flex items-center justify-between">
+<div class="flex items-center gap-3">
+<div class="w-6 h-6 border border-outline-variant bg-surface-container-low flex items-center justify-center text-on-surface-variant font-code-md text-[12px] rounded-sm">1</div>
+<span class="w-10 h-5 bg-surface-container-highest text-on-surface font-code-md text-[10px] font-bold rounded flex items-center justify-center">POST</span>
+<div>
+<h4 class="font-label-md text-[13px] text-on-surface font-bold inline-block mr-2">登录用户</h4>
+<span class="font-code-md text-[11px] text-on-surface-variant">/api/v1/auth/login</span>
+</div>
+</div>
+<div class="flex items-center gap-2">
+<span class="text-[11px] text-on-surface-variant bg-surface-container-low px-2 py-0.5 rounded border border-outline-variant flex items-center gap-1"><span class="material-symbols-outlined text-[12px]">alt_route</span> 主干分支</span>
+<button class="text-outline-variant hover:text-error transition-colors opacity-0 group-hover:opacity-100">
+<span class="material-symbols-outlined text-[18px]">delete</span>
+</button>
+</div>
+</div>
+<!-- Extracted Variable Pill -->
+<div class="mt-2 pl-12 flex items-center gap-2">
+<span class="material-symbols-outlined text-[14px] text-on-surface-variant">output</span>
+<span class="font-code-md text-[11px] text-on-surface-variant border border-outline-variant bg-surface-container-low px-1.5 py-0.5 rounded">auth_token</span>
+</div>
+</div>
+<!-- Step 2: Get Cart (Selected State) -->
+<div class="w-full bg-surface-container-lowest border border-primary-container ring-1 ring-primary-container rounded p-sm relative cursor-pointer flex flex-col shadow-sm">
+<div class="absolute left-0 top-0 bottom-0 w-1 bg-primary-container rounded-l"></div>
+<div class="flex items-center justify-between">
+<div class="flex items-center gap-3 pl-1">
+<div class="w-6 h-6 bg-primary-container text-surface-container-lowest flex items-center justify-center font-code-md text-[12px] font-bold rounded-sm">2</div>
+<span class="w-10 h-5 bg-surface-container-highest text-on-surface font-code-md text-[10px] font-bold rounded flex items-center justify-center">GET</span>
+<div>
+<h4 class="font-label-md text-[13px] text-primary-container font-bold inline-block mr-2">获取购物车</h4>
+<span class="font-code-md text-[11px] text-on-surface-variant">/api/v1/cart/{user_id}</span>
+</div>
+</div>
+<div class="flex items-center gap-2">
+<span class="text-[11px] text-on-surface-variant bg-surface-container-low px-2 py-0.5 rounded border border-outline-variant flex items-center gap-1"><span class="material-symbols-outlined text-[12px]">alt_route</span> 主干分支</span>
+</div>
+</div>
+<div class="mt-2 pl-12 flex items-center gap-2">
+<span class="material-symbols-outlined text-[14px] text-on-surface-variant">input</span>
+<span class="font-code-md text-[11px] text-on-surface-variant border border-outline-variant bg-surface-container-low px-1.5 py-0.5 rounded">Header: Authorization Bearer ${auth_token}</span>
+</div>
+</div>
+<!-- Step 3: Add Item -->
+<div class="w-full bg-surface-container-lowest border border-outline-variant rounded p-sm relative group hover:border-primary-container transition-colors cursor-pointer flex flex-col shadow-sm">
+<div class="flex items-center justify-between">
+<div class="flex items-center gap-3">
+<div class="w-6 h-6 border border-outline-variant bg-surface-container-low flex items-center justify-center text-on-surface-variant font-code-md text-[12px] rounded-sm">3</div>
+<span class="w-10 h-5 bg-surface-container-highest text-on-surface font-code-md text-[10px] font-bold rounded flex items-center justify-center">POST</span>
+<div>
+<h4 class="font-label-md text-[13px] text-on-surface font-bold inline-block mr-2">添加商品</h4>
+<span class="font-code-md text-[11px] text-on-surface-variant">/api/v1/cart/items</span>
+</div>
+</div>
+<div class="flex items-center gap-2">
+<span class="text-[11px] text-on-surface-variant bg-surface-container-low px-2 py-0.5 rounded border border-outline-variant flex items-center gap-1"><span class="material-symbols-outlined text-[12px]">alt_route</span> 仅在验证成功时</span>
+<button class="text-outline-variant hover:text-error transition-colors opacity-0 group-hover:opacity-100">
+<span class="material-symbols-outlined text-[18px]">delete</span>
+</button>
+</div>
+</div>
+</div>
+<!-- Add New Step Placeholder -->
+<div class="w-full border border-dashed border-outline-variant rounded p-sm flex items-center justify-center text-on-surface-variant hover:bg-surface-container-lowest hover:text-primary-container hover:border-primary-container transition-all cursor-pointer bg-surface-container-low mt-2">
+<div class="flex items-center gap-2 py-2">
+<span class="material-symbols-outlined text-[18px]">add</span>
+<span class="font-label-md text-[13px]">拖拽步骤至此或点击添加</span>
+</div>
+</div>
+</div>
+</div>
+</section>
+<!-- ==========================================
+             Right Panel: Step Configuration
+             ========================================== -->
+<aside class="w-[440px] border-l border-outline-variant bg-surface-container-lowest flex flex-col h-full z-10">
+<!-- Config Header -->
+<div class="p-md border-b border-outline-variant bg-surface-container-lowest">
+<div class="flex items-center gap-2 mb-2">
+<span class="font-code-md text-xs text-on-surface-variant border border-outline-variant px-1.5 py-0.5 rounded bg-surface-container-low">Step 02</span>
+</div>
+<h2 class="font-title-md text-title-md text-on-surface flex items-center gap-2">
+<span class="w-10 h-5 bg-surface-container-highest text-on-surface font-code-md text-[10px] font-bold rounded flex items-center justify-center">GET</span>
+                    获取购物车
+                </h2>
+<p class="font-code-md text-[13px] text-on-surface-variant mt-2 truncate border border-outline-variant bg-surface-container-low p-1.5 rounded" title="/api/v1/cart/{user_id}">/api/v1/cart/{user_id}</p>
+</div>
+<!-- Config Tabs -->
+<div class="flex border-b border-outline-variant px-2 bg-surface-container-low">
+<button class="px-md py-2.5 font-label-md text-[13px] text-on-surface-variant hover:text-on-surface border-b-2 border-transparent transition-colors">前置条件</button>
+<button class="px-md py-2.5 font-label-md text-[13px] text-primary-container border-b-2 border-primary-container -mb-px bg-surface-container-lowest">变量引用</button>
+<button class="px-md py-2.5 font-label-md text-[13px] text-on-surface-variant hover:text-on-surface border-b-2 border-transparent transition-colors">断言设置</button>
+<button class="px-md py-2.5 font-label-md text-[13px] text-on-surface-variant hover:text-on-surface border-b-2 border-transparent transition-colors">Body (JSON)</button>
+</div>
+<!-- Config Content Area -->
+<div class="flex-1 overflow-y-auto p-md space-y-lg">
+<!-- Path Variables Section -->
+<section>
+<div class="flex items-center justify-between mb-sm border-b border-outline-variant pb-1.5">
+<h3 class="font-title-md text-[14px] text-on-surface font-bold">路径变量</h3>
+</div>
+<div class="space-y-1 border border-outline-variant rounded overflow-hidden">
+<div class="flex bg-surface-container-lowest">
+<div class="w-1/3 border-r border-outline-variant p-2 flex items-center bg-surface-container-low">
+<span class="font-code-md text-[13px] text-on-surface-variant">user_id</span>
+</div>
+<div class="flex-1 p-2 relative flex items-center">
+<input class="w-full bg-transparent border-none p-0 font-code-md text-[13px] text-on-surface focus:ring-0" type="text" value="{{auth_user.id}}"/>
+<span class="material-symbols-outlined absolute right-2 text-on-surface-variant text-[16px] pointer-events-none">data_object</span>
+</div>
+</div>
+</div>
+</section>
+<!-- Query Parameters Section -->
+<section>
+<div class="flex items-center justify-between mb-sm border-b border-outline-variant pb-1.5">
+<h3 class="font-title-md text-[14px] text-on-surface font-bold">查询参数</h3>
+<button class="text-primary-container hover:underline flex items-center gap-1 font-label-md text-[12px]">
+<span class="material-symbols-outlined text-[16px]">add</span> 添加
+                        </button>
+</div>
+<div class="space-y-1">
+<!-- Key Value Row -->
+<div class="flex border border-outline-variant rounded overflow-hidden group bg-surface-container-lowest relative">
+<div class="w-1/3 border-r border-outline-variant p-2">
+<input class="w-full bg-transparent border-none p-0 font-code-md text-[13px] text-on-surface focus:ring-0" placeholder="Key" type="text" value="include_items"/>
+</div>
+<div class="flex-1 p-2">
+<input class="w-full bg-transparent border-none p-0 font-code-md text-[13px] text-on-surface focus:ring-0" placeholder="Value" type="text" value="true"/>
+</div>
+<button class="absolute right-1 top-1/2 -translate-y-1/2 bg-surface-container-lowest text-outline-variant hover:text-error transition-colors opacity-0 group-hover:opacity-100 rounded px-1">
+<span class="material-symbols-outlined text-[16px]">close</span>
+</button>
+</div>
+<!-- Empty Row -->
+<div class="flex border border-outline-variant rounded overflow-hidden group bg-surface-container-lowest relative">
+<div class="w-1/3 border-r border-outline-variant p-2">
+<input class="w-full bg-transparent border-none p-0 font-code-md text-[13px] text-on-surface focus:ring-0" placeholder="Key" type="text"/>
+</div>
+<div class="flex-1 p-2">
+<input class="w-full bg-transparent border-none p-0 font-code-md text-[13px] text-on-surface focus:ring-0" placeholder="Value" type="text"/>
+</div>
+<button class="absolute right-1 top-1/2 -translate-y-1/2 bg-surface-container-lowest text-outline-variant hover:text-error transition-colors opacity-0 group-hover:opacity-100 rounded px-1">
+<span class="material-symbols-outlined text-[16px]">close</span>
+</button>
+</div>
+</div>
+</section>
+<!-- JSON Editor Mockup -->
+<section>
+<div class="flex items-center justify-between mb-sm border-b border-outline-variant pb-1.5 mt-lg">
+<h3 class="font-title-md text-[14px] text-on-surface font-bold">Body 编辑器</h3>
+</div>
+<div class="border border-outline-variant rounded bg-[#1e1e1e] p-3 text-[#d4d4d4] font-code-md text-[13px] min-h-[120px]">
+<div class="flex text-outline-variant mb-2 border-b border-outline-variant/30 pb-2 text-[11px]">
+<span>application/json</span>
+</div>
+<div>
+<span class="text-[#569cd6]">"items"</span>: [<br/>
+                              {<br/>
+                                <span class="text-[#569cd6]">"product_id"</span>: <span class="text-[#b5cea8]">101</span>,<br/>
+                                <span class="text-[#569cd6]">"quantity"</span>: <span class="text-[#b5cea8]">1</span><br/>
+                              }<br/>
+                            ]
+                        </div>
+</div>
+</section>
+<!-- Dynamic Data Binding Hint -->
+<div class="bg-surface-container-low border border-outline-variant rounded p-sm flex items-start gap-2 mt-lg">
+<span class="material-symbols-outlined text-primary-container text-[16px] mt-0.5">info</span>
+<div>
+<h4 class="font-label-md text-[13px] text-on-surface font-bold">智能变量绑定</h4>
+<p class="font-body-md text-[12px] text-on-surface-variant mt-1 leading-snug"><code class="font-code-md text-[11px] border border-outline-variant bg-surface-container-lowest px-1 rounded">user_id</code> 已自动从上一步“登录用户”的响应中提取映射。</p>
+</div>
+</div>
+</div>
+</aside>
+</main>
+</body></html>
