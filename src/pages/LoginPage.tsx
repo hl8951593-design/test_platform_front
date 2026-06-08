@@ -1,5 +1,5 @@
 import { type FormEvent, useMemo, useState } from "react";
-import { login, register, saveSession } from "../api/auth";
+import { login, register, saveSession, type AuthUser } from "../api/auth";
 import { Icon } from "../components/Icon";
 import type { ActionHandler } from "../types";
 
@@ -29,7 +29,7 @@ export function LoginPage({
   onAuthenticated,
 }: {
   onAction: ActionHandler;
-  onAuthenticated?: () => void;
+  onAuthenticated?: (user: AuthUser) => void;
 }) {
   const [mode, setMode] = useState<AuthMode>("login");
   const [errors, setErrors] = useState<FieldErrors>({});
@@ -88,7 +88,7 @@ export function LoginPage({
         const result = await login(account, password);
         saveSession(result);
         onAction("登录成功");
-        onAuthenticated?.();
+        onAuthenticated?.(result.user);
         return;
       }
 

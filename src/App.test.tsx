@@ -25,7 +25,7 @@ describe("App routing shell", () => {
     expect(screen.getByText("失败聚类分析")).toBeInTheDocument();
   });
 
-  it("opens the profile page when the user entry is clicked", async () => {
+  it("opens the profile page when the user entry is clicked", () => {
     localStorage.setItem("auth_user", JSON.stringify({
       id: 8,
       username: "测试管理员",
@@ -43,7 +43,6 @@ describe("App routing shell", () => {
     window.history.pushState(null, "", "/dashboard#/");
 
     render(<App />);
-    await screen.findByRole("option", { name: "暂无项目" });
     fireEvent.click(screen.getByRole("button", { name: "进入个人中心" }));
 
     expect(window.location.pathname).toBe("/profile");

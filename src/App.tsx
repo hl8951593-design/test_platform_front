@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AUTH_EXPIRED_EVENT } from "./api/client";
 import type { AuthUser } from "./api/auth";
 import { listProjectEnvironments, listProjects, type EnvironmentOption, type ProjectOption } from "./api/projects";
@@ -196,6 +196,11 @@ export default function App() {
   }, [activeProjectId]);
 
   useEffect(() => {
+    if (isLoginRoute) {
+      setEnvironmentLoading(false);
+      return;
+    }
+
     if (!activeProjectId) {
       setEnvironments([]);
       setActiveEnvironmentId(undefined);
@@ -231,7 +236,7 @@ export default function App() {
     return () => {
       ignore = true;
     };
-  }, [activeProjectId]);
+  }, [activeProjectId, isLoginRoute]);
 
   useEffect(() => {
     if (activeEnvironmentId) localStorage.setItem("active_environment_id", String(activeEnvironmentId));
@@ -298,8 +303,8 @@ export default function App() {
       <>
         <LoginPage
           onAction={onAction}
-          onAuthenticated={() => {
-            setAuthUser(readAuthUser());
+          onAuthenticated={(user) => {
+            setAuthUser(user);
             navigate("dashboard");
           }}
         />
@@ -460,41 +465,34 @@ const TopBar = memo(function TopBar({
       </div>
       <div className="topbar-actions">
         <div className="topbar-context">
-          <label className="context-select">
-            <Icon name="folder_special" />
-            <span>项目</span>
-            <select
-              aria-label="项目"
-              disabled={projectLoading || projects.length === 0}
-              onChange={(event) => onProjectChange(Number(event.target.value))}
-              value={activeProjectId ?? ""}
-            >
-              {projectLoading && <option value="">加载项目中...</option>}
-              {!projectLoading && projects.length === 0 && <option value="">暂无项目</option>}
-              {projects.map((project) => (
-                <option key={project.id} value={project.id}>{project.name}</option>
-              ))}
-            </select>
-          </label>
-          <label className="context-select">
-            <Icon name="cloud" />
-            <span>环境</span>
-            <select
-              aria-label="环境"
-              disabled={!activeProjectId || environmentLoading || environments.length === 0}
-              onChange={(event) => onEnvironmentChange(Number(event.target.value))}
-              value={activeEnvironmentId ?? ""}
-            >
-              {!activeProjectId && <option value="">请先选择项目</option>}
-              {activeProjectId && environmentLoading && <option value="">加载环境中...</option>}
-              {activeProjectId && !environmentLoading && environments.length === 0 && <option value="">暂无环境</option>}
-              {environments.map((environment) => (
-                <option key={environment.id} value={environment.id}>
-                  {environment.name}{environment.isDefault ? " 默认" : ""}
-                </option>
-              ))}
-            </select>
-          </label>
+          <ContextPicker
+            activeId={activeProjectId}
+            disabled={projectLoading || projects.length === 0}
+            emptyLabel={projectLoading ? "加载项目中..." : "暂无项目"}
+            icon="folder_special"
+            label="项目"
+            onChange={onProjectChange}
+            options={projects.map((project) => ({
+              id: project.id,
+              label: project.name,
+              description: project.description || project.owner,
+            }))}
+          />
+          <span className="context-divider" />
+          <ContextPicker
+            activeId={activeEnvironmentId}
+            disabled={!activeProjectId || environmentLoading || environments.length === 0}
+            emptyLabel={!activeProjectId ? "请先选择项目" : environmentLoading ? "加载环境中..." : "暂无环境"}
+            icon="cloud"
+            label="环境"
+            onChange={onEnvironmentChange}
+            options={environments.map((environment) => ({
+              id: environment.id,
+              label: environment.name,
+              description: environment.baseUrl || environment.description,
+              badge: environment.isDefault ? "默认" : undefined,
+            }))}
+          />
         </div>
         <label className="search-box">
           <Icon name="search" />
@@ -515,6 +513,94 @@ const TopBar = memo(function TopBar({
         </button>
       </div>
     </header>
+  );
+});
+
+const ContextPicker = memo(function ContextPicker({
+  activeId,
+  disabled,
+  emptyLabel,
+  icon,
+  label,
+  onChange,
+  options,
+}: {
+  activeId?: number;
+  disabled: boolean;
+  emptyLabel: string;
+  icon: string;
+  label: string;
+  onChange: (id: number) => void;
+  options: Array<{ id: number; label: string; description?: string; badge?: string }>;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const activeOption = options.find((option) => option.id === activeId);
+
+  useEffect(() => {
+    if (!open) return;
+    const close = (event: MouseEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", close);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("mousedown", close);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [open]);
+
+  return (
+    <div className={open ? "context-picker open" : "context-picker"} ref={rootRef}>
+      <button
+        aria-expanded={open}
+        aria-haspopup="listbox"
+        aria-label={`${label}：${activeOption?.label ?? emptyLabel}`}
+        className="context-picker-trigger"
+        disabled={disabled}
+        onClick={() => setOpen((value) => !value)}
+        type="button"
+      >
+        <span className="context-picker-icon"><Icon name={icon} /></span>
+        <span className="context-picker-copy">
+          <small>{label}</small>
+          <strong>{activeOption?.label ?? emptyLabel}</strong>
+        </span>
+        <Icon name="expand_more" />
+      </button>
+      {open && (
+        <div aria-label={`${label}列表`} className="context-picker-menu" role="listbox">
+          <div className="context-picker-menu-title">
+            <span>切换{label}</span>
+            <small>{options.length} 项</small>
+          </div>
+          {options.map((option) => (
+            <button
+              aria-selected={option.id === activeId}
+              className={option.id === activeId ? "context-picker-option selected" : "context-picker-option"}
+              key={option.id}
+              onClick={() => {
+                onChange(option.id);
+                setOpen(false);
+              }}
+              role="option"
+              type="button"
+            >
+              <span className="context-picker-option-icon"><Icon name={icon} /></span>
+              <span className="context-picker-option-copy">
+                <strong>{option.label}</strong>
+                {option.description && <small>{option.description}</small>}
+              </span>
+              {option.badge && <span className="context-picker-badge">{option.badge}</span>}
+              {option.id === activeId && <Icon name="check" />}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
   );
 });
 
