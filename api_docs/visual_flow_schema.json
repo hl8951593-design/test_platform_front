@@ -1,0 +1,118 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://testauto.local/schemas/visual-flow-1.0.json",
+  "title": "TestAuto Visual Flow Definition",
+  "type": "object",
+  "required": ["schemaVersion", "projectId", "name", "description", "nodes", "edges", "viewport"],
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "id": { "$ref": "#/$defs/id" },
+    "projectId": { "type": "integer", "minimum": 1 },
+    "environmentId": { "type": "integer", "minimum": 1 },
+    "name": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "description": { "type": "string" },
+    "nodes": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/node" }
+    },
+    "edges": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/edge" }
+    },
+    "viewport": {
+      "type": "object",
+      "required": ["zoom"],
+      "properties": {
+        "zoom": { "type": "number", "minimum": 0.6, "maximum": 1.4 }
+      },
+      "additionalProperties": false
+    },
+    "updatedAt": { "type": "string", "format": "date-time" }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "id": {
+      "oneOf": [
+        { "type": "integer", "minimum": 1 },
+        { "type": "string", "minLength": 1 }
+      ]
+    },
+    "position": {
+      "type": "object",
+      "required": ["x", "y"],
+      "properties": {
+        "x": { "type": "number" },
+        "y": { "type": "number" }
+      },
+      "additionalProperties": false
+    },
+    "binding": {
+      "type": "object",
+      "required": ["id", "target", "sourceNodeId", "sourcePath"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "target": {
+          "type": "string",
+          "pattern": "^(pathParams|query|headers|body|variables|messages)(\\.|\\[|$)"
+        },
+        "sourceNodeId": { "type": "string", "minLength": 1 },
+        "sourcePath": { "type": "string", "minLength": 1 },
+        "fallback": {}
+      },
+      "additionalProperties": false
+    },
+    "nodeConfig": {
+      "type": "object",
+      "required": ["inputBindings", "outputPaths"],
+      "properties": {
+        "description": { "type": "string" },
+        "condition": { "type": "string" },
+        "delayMs": { "type": "number", "minimum": 0 },
+        "continueOnFailure": { "type": "boolean" },
+        "caseConfig": { "type": "object" },
+        "caseOverrides": { "type": "object" },
+        "inputBindings": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/binding" }
+        },
+        "outputPaths": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "node": {
+      "type": "object",
+      "required": ["id", "kind", "name", "position", "config"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "kind": {
+          "enum": ["api_case", "websocket_case", "condition", "delay", "start", "end"]
+        },
+        "name": { "type": "string", "minLength": 1 },
+        "referenceId": { "$ref": "#/$defs/id" },
+        "method": { "type": "string" },
+        "path": { "type": "string" },
+        "position": { "$ref": "#/$defs/position" },
+        "config": { "$ref": "#/$defs/nodeConfig" }
+      },
+      "additionalProperties": false
+    },
+    "edge": {
+      "type": "object",
+      "required": ["id", "source", "target", "route"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "source": { "type": "string", "minLength": 1 },
+        "target": { "type": "string", "minLength": 1 },
+        "route": { "enum": ["always", "success", "failure", "true", "false"] },
+        "sourceHandle": { "type": "string" },
+        "targetHandle": { "type": "string" },
+        "label": { "type": "string" }
+      },
+      "additionalProperties": false
+    }
+  }
+}
