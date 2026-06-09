@@ -79,11 +79,25 @@ function routeContent({
         />
       );
     case "plans":
-      return <PlansPage onAction={onAction} />;
+      return (
+        <PlansPage
+          environmentId={activeEnvironmentId}
+          environments={environments}
+          onAction={onAction}
+          projectId={activeProjectId}
+        />
+      );
     case "flow":
       return <FlowPage environmentId={activeEnvironmentId} onAction={onAction} projectId={activeProjectId} />;
     case "scenarios":
-      return <ScenariosPage onAction={onAction} />;
+      return (
+        <ScenariosPage
+          environmentId={activeEnvironmentId}
+          environments={environments}
+          onAction={onAction}
+          projectId={activeProjectId}
+        />
+      );
     case "api":
       return (
         <ApiPage

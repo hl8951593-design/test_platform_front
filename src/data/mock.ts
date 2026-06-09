@@ -36,53 +36,6 @@ export const projects = [
   ["Checkout Redesign", "电商平台", "3", "65.4%", "88.3%", "3 天前", "警告"],
 ];
 
-export const planStats = [
-  { label: "总计划数", value: "124", icon: "assignment", tone: "blue" },
-  { label: "运行中", value: "8", icon: "play_circle", tone: "green" },
-  { label: "定时等待", value: "45", icon: "schedule", tone: "orange" },
-  { label: "最近失败", value: "3", icon: "error", tone: "red" },
-];
-
-export const plans = [
-  {
-    name: "核心链路全量回归",
-    id: "PLN-CORE-001",
-    desc: "覆盖主交易、登录、支付模块",
-    trigger: "Cron 定时",
-    meta: "0 2 * * *",
-    envs: ["UAT", "Pre-Prod"],
-    steps: ["Data Prep", ["API Regression", "UI Sanity"], "Cleanup"],
-    next: "今天 02:00",
-    sub: "约 10 小时后",
-    enabled: true,
-  },
-  {
-    name: "提测前置拦截检查",
-    id: "PLN-CI-042",
-    desc: "开发提交合并请求时触发",
-    trigger: "Webhook",
-    meta: "GitLab MR",
-    envs: ["Dev"],
-    steps: ["BVT Tests", "Sonar Scan"],
-    next: "事件触发",
-    sub: "等待 Webhook",
-    enabled: true,
-  },
-  {
-    name: "生产环境紧急补丁验证",
-    id: "PLN-HOTFIX-99",
-    desc: "仅包含核心 P0 用例",
-    trigger: "手动触发",
-    meta: "",
-    envs: ["Production"],
-    steps: ["P0 Suite Check"],
-    next: "-",
-    sub: "",
-    enabled: false,
-    danger: true,
-  },
-];
-
 export const apiFolders = [
   { group: "Auth Services", items: [["GET", "Fetch User Profile"], ["PUT", "Update Account Settings"], ["DEL", "Delete Session Token"]] },
   { group: "Payment Flow", items: [["POST", "Create New Transaction"], ["GET", "Payment Detail"]] },
@@ -95,10 +48,4 @@ export const executionRows = [
   ["134", "Pass", "DELETE /v1/post/12 - 级联删除", "api.v1.posts.delete"],
   ["133", "Pass", "AUTH /refresh - Token 续期", "api.auth.token.refresh"],
   ["137", "Running", "PUT /config/update - 配置变更", "api.v1.config.update"],
-];
-
-export const scenarioSteps = [
-  { method: "POST", title: "登录用户", path: "/api/v1/auth/login", token: "auth_token" },
-  { method: "GET", title: "获取购物车", path: "/api/v1/cart/{user_id}", active: true },
-  { method: "POST", title: "添加商品", path: "/api/v1/cart/items" },
 ];
