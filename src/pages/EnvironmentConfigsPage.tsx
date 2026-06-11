@@ -114,6 +114,9 @@ export function EnvironmentConfigsPage({
   const [envForm, setEnvForm] = useState({ name: "", baseUrl: "", description: "", isDefault: false });
   const [envFormErrors, setEnvFormErrors] = useState<{ name?: string; baseUrl?: string }>({});
   const [variableForm, setVariableForm] = useState({ name: "", value: "", isSecret: false });
+  const [editingVariableId, setEditingVariableId] = useState<number>();
+  const [isSavingVariable, setIsSavingVariable] = useState(false);
+  const [deletingVariableId, setDeletingVariableId] = useState<number>();
   const [boundCases, setBoundCases] = useState<BoundCaseView[]>([]);
   const [boundCasesLoading, setBoundCasesLoading] = useState(false);
   const [boundCasesError, setBoundCasesError] = useState("");
@@ -202,7 +205,18 @@ export function EnvironmentConfigsPage({
   const selectEnvironment = (environment: EnvironmentView) => {
     setActiveEnvironmentId(environment.id);
     setVariableForm({ name: "", value: "", isSecret: false });
+    setEditingVariableId(undefined);
     setRevealedSecrets({});
+  };
+
+  const editVariable = (variable: VariableView) => {
+    setEditingVariableId(variable.id);
+    setVariableForm({ name: variable.name, value: variable.value, isSecret: variable.isSecret });
+  };
+
+  const resetVariableForm = () => {
+    setEditingVariableId(undefined);
+    setVariableForm({ name: "", value: "", isSecret: false });
   };
 
   const startEdit = (environment: EnvironmentView) => {
@@ -296,28 +310,49 @@ export function EnvironmentConfigsPage({
       return;
     }
 
+    setIsSavingVariable(true);
     try {
-      await upsertEnvironmentVariable(projectId, activeEnvironment.id, {
+      const saved = await upsertEnvironmentVariable(projectId, activeEnvironment.id, {
         name: variableForm.name.trim(),
         value: variableForm.value,
         is_secret: variableForm.isSecret,
       });
-      setVariableForm({ name: "", value: "", isSecret: false });
-      onAction(`保存变量 ${variableForm.name}`);
-      await loadEnvironments(activeEnvironment.id);
+      const mappedVariable = mapVariable(saved);
+      setEnvironments((current) => current.map((environment) => {
+        if (environment.id !== activeEnvironment.id) return environment;
+        const existingIndex = environment.variables.findIndex(
+          (item) => item.id === mappedVariable.id || item.name === mappedVariable.name,
+        );
+        const variables = [...environment.variables];
+        if (existingIndex >= 0) variables[existingIndex] = mappedVariable;
+        else variables.push(mappedVariable);
+        return { ...environment, variableCount: variables.length, variables };
+      }));
+      onAction(`${editingVariableId ? "更新" : "保存"}变量 ${variableForm.name}`);
+      resetVariableForm();
     } catch (error) {
       onAction(error instanceof Error ? error.message : "变量保存失败");
+    } finally {
+      setIsSavingVariable(false);
     }
   };
 
   const removeVariable = async (variable: VariableView) => {
     if (!projectId || !activeEnvironment) return;
+    setDeletingVariableId(variable.id);
     try {
       await deleteEnvironmentVariable(projectId, activeEnvironment.id, variable.id);
+      setEnvironments((current) => current.map((environment) => {
+        if (environment.id !== activeEnvironment.id) return environment;
+        const variables = environment.variables.filter((item) => item.id !== variable.id);
+        return { ...environment, variableCount: variables.length, variables };
+      }));
+      if (editingVariableId === variable.id) resetVariableForm();
       onAction(`删除变量 ${variable.name}`);
-      await loadEnvironments(activeEnvironment.id);
     } catch (error) {
       onAction(error instanceof Error ? error.message : "变量删除失败");
+    } finally {
+      setDeletingVariableId(undefined);
     }
   };
 
@@ -526,40 +561,98 @@ export function EnvironmentConfigsPage({
         <aside className="environment-side-panel">
           <section className="environment-section">
             <div className="environment-section-head">
-              <h3>环境变量</h3>
+              <div>
+                <h3>环境变量</h3>
+                <small>在测试用例中通过 {"{{变量名}}"} 引用</small>
+              </div>
               <span>{activeEnvironment?.variableCount ?? 0} 个</span>
             </div>
             <form className="variable-form" onSubmit={saveVariable}>
-              <input onChange={(event) => setVariableForm((current) => ({ ...current, name: event.target.value }))} placeholder="变量名，如 token" value={variableForm.name} />
-              <input onChange={(event) => setVariableForm((current) => ({ ...current, value: event.target.value }))} placeholder="变量值" value={variableForm.value} />
-              <label className="secret-check">
-                <input checked={variableForm.isSecret} onChange={(event) => setVariableForm((current) => ({ ...current, isSecret: event.target.checked }))} type="checkbox" />
-                敏感
+              <div className="variable-form-title">
+                <div>
+                  <strong>{editingVariableId ? "编辑变量" : "新增变量"}</strong>
+                  <small>{editingVariableId ? "变量名不可修改，可更新变量值与敏感属性" : "变量值会按当前环境隔离保存"}</small>
+                </div>
+                {editingVariableId && <button className="text-btn" onClick={resetVariableForm} type="button">取消编辑</button>}
+              </div>
+              <label>
+                <span>变量名</span>
+                <input
+                  disabled={Boolean(editingVariableId)}
+                  onChange={(event) => setVariableForm((current) => ({ ...current, name: event.target.value }))}
+                  placeholder="例如 access_token"
+                  value={variableForm.name}
+                />
               </label>
-              <button className="btn" disabled={!activeEnvironment} type="submit">
-                <Icon name="add" />
-                保存变量
-              </button>
+              <label>
+                <span>变量值</span>
+                <input
+                  onChange={(event) => setVariableForm((current) => ({ ...current, value: event.target.value }))}
+                  placeholder="请输入变量值"
+                  type={variableForm.isSecret ? "password" : "text"}
+                  value={variableForm.value}
+                />
+              </label>
+              <div className="variable-form-actions">
+                <label className="secret-check">
+                  <input checked={variableForm.isSecret} onChange={(event) => setVariableForm((current) => ({ ...current, isSecret: event.target.checked }))} type="checkbox" />
+                  作为敏感变量保存
+                </label>
+                <button className="btn primary" disabled={!activeEnvironment || isSavingVariable} type="submit">
+                  <Icon name={isSavingVariable ? "progress_activity" : editingVariableId ? "save" : "add"} />
+                  {isSavingVariable ? "保存中..." : editingVariableId ? "保存修改" : "保存变量"}
+                </button>
+              </div>
             </form>
             <div className="variable-list">
               {(activeEnvironment?.variables ?? []).map((variable) => (
                 <div className="variable-row" key={variable.id}>
-                  <div>
-                    <strong>{variable.name}</strong>
-                    <code>{variable.isSecret && !revealedSecrets[variable.id] ? "********" : variable.value}</code>
+                  <div className="variable-row-main">
+                    <div className="variable-row-title">
+                      <strong>{variable.name}</strong>
+                      <span className={variable.isSecret ? "variable-type secret" : "variable-type"}>
+                        <Icon name={variable.isSecret ? "lock" : "data_object"} />
+                        {variable.isSecret ? "敏感" : "普通"}
+                      </span>
+                    </div>
+                    <code>{variable.isSecret && !revealedSecrets[variable.id] ? "••••••••••••" : variable.value || "空值"}</code>
+                    <small>更新于 {variable.updatedAt}</small>
                   </div>
-                  {variable.isSecret && (
-                    <button className="icon-btn" onClick={() => setRevealedSecrets((current) => ({ ...current, [variable.id]: !current[variable.id] }))} title="显示或隐藏变量" type="button">
-                      <Icon name={revealedSecrets[variable.id] ? "visibility_off" : "visibility"} />
+                  <div className="variable-row-actions">
+                    {variable.isSecret && (
+                      <button className="icon-btn" onClick={() => setRevealedSecrets((current) => ({ ...current, [variable.id]: !current[variable.id] }))} title={revealedSecrets[variable.id] ? "隐藏变量值" : "显示变量值"} type="button">
+                        <Icon name={revealedSecrets[variable.id] ? "visibility_off" : "visibility"} />
+                      </button>
+                    )}
+                    <button className="icon-btn" onClick={() => editVariable(variable)} title="编辑变量" type="button">
+                      <Icon name="edit" />
                     </button>
-                  )}
-                  <button className="icon-btn delete-row-btn" onClick={() => void removeVariable(variable)} title="删除变量" type="button">
-                    <Icon name="delete" />
-                  </button>
+                    <button
+                      className="icon-btn delete-row-btn"
+                      disabled={deletingVariableId === variable.id}
+                      onClick={() => void removeVariable(variable)}
+                      title="删除变量"
+                      type="button"
+                    >
+                      <Icon name={deletingVariableId === variable.id ? "progress_activity" : "delete"} />
+                    </button>
+                  </div>
                 </div>
               ))}
-              {activeEnvironment && activeEnvironment.variables.length === 0 && <p className="empty-copy">暂无变量，可新增 token、user_id 等变量后在用例中通过 {"{{变量名}}"} 引用。</p>}
-              {!activeEnvironment && <p className="empty-copy">请选择或新建环境后维护变量。</p>}
+              {activeEnvironment && activeEnvironment.variables.length === 0 && (
+                <div className="variable-empty-state">
+                  <Icon name="key" />
+                  <strong>暂无环境变量</strong>
+                  <p>可新增 token、user_id、base_path 等变量，在测试用例中复用。</p>
+                </div>
+              )}
+              {!activeEnvironment && (
+                <div className="variable-empty-state">
+                  <Icon name="cloud_off" />
+                  <strong>请先选择环境</strong>
+                  <p>选择或新建环境后即可维护独立变量。</p>
+                </div>
+              )}
             </div>
           </section>
 

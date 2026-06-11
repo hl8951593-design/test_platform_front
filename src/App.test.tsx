@@ -234,7 +234,7 @@ describe("App routing shell", () => {
     );
 
     expect(await screen.findByText("登录用户")).toBeInTheDocument();
-    expect(screen.queryByText("查询用户详情")).not.toBeInTheDocument();
+    expect(screen.getByText("查询用户详情")).toBeInTheDocument();
     expect(screen.getByText("通过")).toBeInTheDocument();
 
     fireEvent.change(screen.getByPlaceholderText("按用例标题查询"), { target: { value: "登录" } });
@@ -242,6 +242,7 @@ describe("App routing shell", () => {
     expect(screen.queryByText("查询用户详情")).not.toBeInTheDocument();
 
     fireEvent.change(screen.getByPlaceholderText("按用例标题查询"), { target: { value: "" } });
+    expect(screen.getByText("查询用户详情")).toBeInTheDocument();
     fireEvent.click(screen.getByLabelText("请求方式"));
     fireEvent.click(screen.getByRole("button", { name: /POST/ }));
     expect(screen.getByText("登录用户")).toBeInTheDocument();
@@ -249,14 +250,14 @@ describe("App routing shell", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /GET/ }));
     expect(screen.getByText("登录用户")).toBeInTheDocument();
-    expect(screen.queryByText("查询用户详情")).not.toBeInTheDocument();
+    expect(screen.getByText("查询用户详情")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: /POST/ }));
     expect(screen.queryByText("登录用户")).not.toBeInTheDocument();
-    expect(screen.queryByText("查询用户详情")).not.toBeInTheDocument();
+    expect(screen.getByText("查询用户详情")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "草稿" }));
-    expect(screen.queryByText("查询用户详情")).not.toBeInTheDocument();
+    expect(screen.getByText("查询用户详情")).toBeInTheDocument();
     expect(screen.queryByText("登录用户")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "已启用" }));
@@ -264,7 +265,7 @@ describe("App routing shell", () => {
     expect(screen.queryByText("登录用户")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "全部" }));
-    expect(screen.queryByText("查询用户详情")).not.toBeInTheDocument();
+    expect(screen.getByText("查询用户详情")).toBeInTheDocument();
   });
 
   it("creates an environment variable from the API test case page", async () => {
@@ -424,8 +425,8 @@ describe("App routing shell", () => {
             },
             response_snapshot: {
               status_code: 403,
-              body: "error code: 1010",
-              json: null,
+              body: null,
+              json: { message: "error code: 1010" },
               headers: { Server: "cloudflare" },
             },
             assertion_results: [
@@ -457,7 +458,9 @@ describe("App routing shell", () => {
 
     expect(await screen.findByText("执行响应")).toBeInTheDocument();
     expect(screen.getByText("HTTP 403")).toBeInTheDocument();
-    expect(screen.getAllByText("error code: 1010")[0]).toBeInTheDocument();
+    expect(screen.getAllByText(/error code: 1010/).length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole("button", { name: "格式化 JSON" }));
+    expect(screen.getByText("JSON 已格式化")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("tab", { name: "响应头" }));
     expect(screen.getByText(/cloudflare/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("tab", { name: "请求快照" }));
@@ -467,6 +470,167 @@ describe("App routing shell", () => {
     expect(screen.getByText(/期望 200，实际 403/)).toBeInTheDocument();
     expect(screen.getByRole("tabpanel")).toHaveClass("notpass");
     expect(screen.queryByText(/"actual": 403/)).not.toBeInTheDocument();
+  });
+
+  it("uses the bound environment host variable in the case URL", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          code: 0,
+          message: "ok",
+          data: [{
+            id: 1,
+            name: "host variable case",
+            method: "POST",
+            path: "/api/orders",
+            environment_id: 1,
+          }],
+        }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ code: 0, message: "ok", data: [] }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          code: 0,
+          message: "ok",
+          data: {
+            id: 1,
+            name: "host variable case",
+            method: "POST",
+            path: "{{host}}/api/orders",
+            environment_id: 1,
+          },
+        }),
+      } as Response);
+
+    render(
+      <ApiPage
+        environmentError=""
+        environmentId={1}
+        environmentLoading={false}
+        environments={[{
+          id: 1,
+          name: "test",
+          baseUrl: "https://fallback.example.com",
+          description: "",
+          isDefault: true,
+          variables: [{ id: "1", name: "host", value: "https://test.example.com", isSecret: false }],
+        }]}
+        onAction={vi.fn()}
+        projectId={1}
+      />,
+    );
+
+    fireEvent.click(await screen.findByText("host variable case"));
+    expect(screen.getByDisplayValue("{{host}}/api/orders")).toBeInTheDocument();
+    const saveButton = screen.getByRole("dialog").querySelector<HTMLButtonElement>(".modal-actions .primary");
+    expect(saveButton).not.toBeNull();
+    fireEvent.click(saveButton!);
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenLastCalledWith(
+        "http://127.0.0.1:8000/api/v1/test-cases/1?project_id=1",
+        expect.objectContaining({
+          body: expect.stringContaining('"path":"{{host}}/api/orders"'),
+          method: "PUT",
+        }),
+      ),
+    );
+  });
+
+  it("formats the JSON request body from the editor toolbar", async () => {
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          code: 0,
+          message: "ok",
+          data: [{
+            id: 1,
+            name: "JSON 用例",
+            method: "POST",
+            path: "/json",
+            environment_id: 1,
+            body_type: "json",
+            body: { compact: true },
+          }],
+        }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ code: 0, message: "ok", data: [] }),
+      } as Response);
+
+    render(
+      <ApiPage
+        environmentError=""
+        environmentId={1}
+        environmentLoading={false}
+        environments={[{ id: 1, name: "UAT", baseUrl: "https://api.test", description: "", isDefault: true }]}
+        onAction={vi.fn()}
+        projectId={1}
+      />,
+    );
+
+    fireEvent.click(await screen.findByText("JSON 用例"));
+    fireEvent.click(screen.getByRole("button", { name: "Body" }));
+    const editor = screen.getByPlaceholderText("请输入 JSON 请求体；留空则按无请求体提交。");
+    fireEvent.change(editor, { target: { value: '{"name":"test","nested":{"enabled":true}}' } });
+    fireEvent.click(screen.getByRole("button", { name: "格式化 JSON" }));
+
+    expect(editor).toHaveValue('{\n  "name": "test",\n  "nested": {\n    "enabled": true\n  }\n}');
+    expect(screen.getByText("JSON 格式正常")).toBeInTheDocument();
+  });
+
+  it("keeps focus while typing a custom request header key", async () => {
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          code: 0,
+          message: "ok",
+          data: [{
+            id: 1,
+            name: "Header 用例",
+            method: "GET",
+            path: "/headers",
+            environment_id: 1,
+          }],
+        }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ code: 0, message: "ok", data: [] }),
+      } as Response);
+
+    render(
+      <ApiPage
+        environmentError=""
+        environmentId={1}
+        environmentLoading={false}
+        environments={[{ id: 1, name: "UAT", baseUrl: "https://api.test", description: "", isDefault: true }]}
+        onAction={vi.fn()}
+        projectId={1}
+      />,
+    );
+
+    fireEvent.click(await screen.findByText("Header 用例"));
+    fireEvent.click(screen.getByRole("button", { name: "Headers" }));
+    fireEvent.click(screen.getByRole("button", { name: "添加请求头" }));
+
+    const keyInput = screen.getByPlaceholderText("选择或输入 Header Key");
+    keyInput.focus();
+    fireEvent.change(keyInput, { target: { value: "L" } });
+    expect(screen.getByPlaceholderText("选择或输入 Header Key")).toBe(keyInput);
+    expect(document.activeElement).toBe(keyInput);
+
+    fireEvent.change(keyInput, { target: { value: "Link" } });
+    expect(keyInput).toHaveValue("Link");
+    expect(document.activeElement).toBe(keyInput);
   });
 
   it("converts GET URL query string into request params", async () => {
@@ -650,6 +814,11 @@ describe("App routing shell", () => {
     expect(screen.getByRole("button", { name: "运行" })).toBeEnabled();
 
     fireEvent.click(screen.getByRole("button", { name: "删除" }));
+    expect(screen.getByRole("dialog", { name: "确认删除该测试用例？" })).toBeInTheDocument();
+    expect(screen.getByText(/即将删除“run me”/)).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+
+    fireEvent.click(screen.getByRole("button", { name: "确认删除" }));
     await waitFor(() =>
       expect(fetchMock).toHaveBeenLastCalledWith(
         "http://127.0.0.1:8000/api/v1/test-cases/1?project_id=1",

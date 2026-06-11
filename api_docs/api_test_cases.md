@@ -31,41 +31,6 @@ project
 - 执行记录保存
 - 环境变量维护
 
-## WebSocket 测试用例
-
-WebSocket 测试用例与 HTTP 测试用例完全独立，详细契约见 `api_docs/api_websocket_test_cases.md`。
-
-```text
-GET  /websocket-test-cases
-POST /websocket-test-cases
-PUT  /websocket-test-cases/{test_case_id}
-POST /websocket-test-cases/{test_case_id}/execute
-POST /websocket-test-cases/execute-unsaved
-POST /websocket-test-cases/batch-execute
-```
-
-WebSocket 用例请求体核心字段：
-
-```json
-{
-  "name": "实时通知连接",
-  "description": "验证连接与消息响应",
-  "environment_id": 1,
-  "environment_ids": [1],
-  "path": "wss://example.com/ws?token={{token}}",
-  "headers": {},
-  "subprotocols": ["json"],
-  "connect_timeout_ms": 5000,
-  "receive_timeout_ms": 10000,
-  "receive_count": 1,
-  "messages": [{"type": "json", "data": {"action": "ping"}}],
-  "assertions": [],
-  "extractors": []
-}
-```
-
-前端通过独立的 `GET /websocket-test-cases` 加载 WebSocket 用例，并与 HTTP 用例映射后合并展示。
-
 ## 查询测试用例列表
 
 | 项目 | 内容 |

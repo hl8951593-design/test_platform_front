@@ -302,6 +302,12 @@ export function updateFlow(projectId: number, flowId: string | number, definitio
   });
 }
 
+export function deleteFlow(projectId: number, flowId: string | number) {
+  return requestWithAuth<void>(`/flows/${flowId}?${buildQuery(projectId)}`, {
+    method: "DELETE",
+  });
+}
+
 export function executeFlow(projectId: number, flowId: string | number, environmentId?: number, idempotencyKey?: string) {
   const query = new URLSearchParams({ project_id: String(projectId) });
   if (environmentId) query.set("environment_id", String(environmentId));

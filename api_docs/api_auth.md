@@ -179,3 +179,65 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 ACCESS_TOKEN_EXPIRE_MINUTES=30
 REFRESH_TOKEN_EXPIRE_DAYS=7
 ```
+
+## 刷新访问令牌
+
+### 基本信息
+
+| 项目 | 内容 |
+| --- | --- |
+| 接口 | `/auth/refresh` |
+| 方法 | `POST` |
+| Content-Type | `application/json` |
+| 说明 | 使用 refresh token 换取新的 access token 和 refresh token |
+
+### 请求参数
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| refresh_token | string | 是 | 登录接口返回的 refresh token |
+
+### 请求示例
+
+```http
+POST /api/v1/auth/refresh HTTP/1.1
+Host: 127.0.0.1:8000
+Content-Type: application/json
+
+{
+  "refresh_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+}
+```
+
+### 成功响应
+
+```json
+{
+  "code": 0,
+  "message": "令牌刷新成功",
+  "data": {
+    "access_token": "new-access-token",
+    "refresh_token": "new-refresh-token",
+    "token_type": "bearer",
+    "user": {
+      "id": 1,
+      "username": "测试用户",
+      "avatar": "https://example.com/avatar.png",
+      "account": "test_user",
+      "phone": "13800138000",
+      "email": "test@example.com",
+      "is_active": true,
+      "is_admin": false,
+      "created_at": "2026-06-02T10:00:00"
+    }
+  }
+}
+```
+
+### 常见错误
+
+| 状态码 | 场景 | 返回说明 |
+| --- | --- | --- |
+| 401 | refresh token 无效、过期，或传入 access token | `刷新令牌无效` |
+| 403 | 用户已被禁用 | `用户已被禁用` |
+| 422 | 请求参数格式不合法 | FastAPI 参数校验错误详情 |

@@ -1,5 +1,8 @@
+import { requestWithAuth } from "./client";
+
 export type ScenarioStepKind = "api_case" | "websocket_case" | "delay" | "condition";
-export type ScenarioRunStatus = "passed" | "failed";
+export type ScenarioRunStatus = "running" | "passed" | "failed" | "timeout";
+export type ScenarioStepStatus = ScenarioRunStatus | "skipped";
 
 export interface ScenarioStep {
   id: string;
@@ -22,6 +25,7 @@ export interface ScenarioDataset {
 export interface TestScenario {
   id: string;
   projectId: number;
+  version: number;
   name: string;
   description: string;
   environmentId?: number;
@@ -36,7 +40,7 @@ export interface TestScenario {
 export interface ScenarioStepResult {
   stepId: string;
   name: string;
-  status: ScenarioRunStatus;
+  status: ScenarioStepStatus;
   durationMs: number;
   message: string;
 }
@@ -51,107 +55,212 @@ export interface ScenarioRun {
   datasetName: string;
   status: ScenarioRunStatus;
   startedAt: string;
+  finishedAt?: string;
   durationMs: number;
   stepResults: ScenarioStepResult[];
 }
 
-const SCENARIO_STORAGE_PREFIX = "testauto_scenarios_project_";
-const RUN_STORAGE_PREFIX = "testauto_scenario_runs_project_";
+type BackendRecord = Record<string, unknown>;
+type PaginatedResult = {
+  items?: BackendRecord[];
+  records?: BackendRecord[];
+  data?: BackendRecord[];
+  total?: number;
+  page?: number;
+  page_size?: number;
+};
 
 export function scenarioUniqueId(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-function readStorage<T>(key: string, fallback: T): T {
-  try {
-    const raw = localStorage.getItem(key);
-    return raw ? JSON.parse(raw) as T : fallback;
-  } catch {
-    return fallback;
-  }
+function buildQuery(values: Record<string, string | number | undefined>) {
+  const query = new URLSearchParams();
+  Object.entries(values).forEach(([key, value]) => {
+    if (value !== undefined && value !== "") query.set(key, String(value));
+  });
+  return query.toString();
 }
 
-function writeStorage<T>(key: string, value: T) {
-  localStorage.setItem(key, JSON.stringify(value));
+function asRecord(value: unknown): BackendRecord {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as BackendRecord : {};
 }
 
-function scenarioKey(projectId: number) {
-  return `${SCENARIO_STORAGE_PREFIX}${projectId}`;
+function asArray(value: unknown) {
+  return Array.isArray(value) ? value : [];
 }
 
-function runKey(projectId: number) {
-  return `${RUN_STORAGE_PREFIX}${projectId}`;
+function asOptionalNumber(value: unknown) {
+  const parsed = Number(value);
+  return value !== null && value !== undefined && Number.isFinite(parsed) ? parsed : undefined;
 }
 
-function normalizeScenario(source: TestScenario, projectId: number): TestScenario {
-  const now = new Date().toISOString();
+function unwrapItems(result: BackendRecord[] | PaginatedResult) {
+  if (Array.isArray(result)) return result;
+  return result.items ?? result.records ?? result.data ?? [];
+}
+
+function mapStep(value: unknown, index: number): ScenarioStep {
+  const source = asRecord(value);
+  const config = source.config ?? source.config_text ?? source.configText ?? {};
   return {
-    ...source,
-    id: String(source.id || scenarioUniqueId("SCN")),
-    projectId,
-    name: String(source.name || "未命名场景"),
-    description: String(source.description || ""),
-    environmentId: Number.isFinite(Number(source.environmentId)) ? Number(source.environmentId) : undefined,
-    tags: Array.isArray(source.tags) ? source.tags.map(String) : [],
-    steps: Array.isArray(source.steps) ? source.steps.map((step) => ({
-      ...step,
-      id: String(step.id || scenarioUniqueId("STEP")),
-      kind: ["api_case", "websocket_case", "delay", "condition"].includes(step.kind) ? step.kind : "api_case",
-      name: String(step.name || "未命名步骤"),
-      method: String(step.method || "STEP"),
-      path: String(step.path || ""),
-      configText: String(step.configText || "{}"),
-      continueOnFailure: step.continueOnFailure === true,
-    })) : [],
-    datasets: Array.isArray(source.datasets) ? source.datasets.map((dataset) => ({
-      ...dataset,
-      id: String(dataset.id || scenarioUniqueId("DATA")),
-      name: String(dataset.name || "默认数据"),
-      enabled: dataset.enabled !== false,
-      variablesText: String(dataset.variablesText || "{}"),
-    })) : [],
-    createdAt: source.createdAt || now,
-    updatedAt: source.updatedAt || now,
+    id: String(source.id ?? source.step_id ?? `STEP-${index + 1}`),
+    kind: String(source.kind ?? "api_case") as ScenarioStepKind,
+    referenceId: source.reference_id as string | number | undefined ?? source.referenceId as string | number | undefined,
+    name: String(source.name ?? `步骤 ${index + 1}`),
+    method: String(source.method ?? ""),
+    path: String(source.path ?? ""),
+    configText: typeof config === "string" ? config : JSON.stringify(config, null, 2),
+    continueOnFailure: Boolean(source.continue_on_failure ?? source.continueOnFailure),
+  };
+}
+
+function mapDataset(value: unknown, index: number): ScenarioDataset {
+  const source = asRecord(value);
+  const variables = source.variables ?? source.variables_text ?? source.variablesText ?? {};
+  return {
+    id: String(source.id ?? source.dataset_id ?? `DATA-${index + 1}`),
+    name: String(source.name ?? `数据集 ${index + 1}`),
+    enabled: source.enabled !== false,
+    variablesText: typeof variables === "string" ? variables : JSON.stringify(variables, null, 2),
+  };
+}
+
+function mapScenario(value: unknown, projectId: number): TestScenario {
+  const source = asRecord(value);
+  return {
+    id: String(source.id ?? source.scenario_id ?? ""),
+    projectId: Number(source.project_id ?? projectId),
+    version: Number(source.version ?? source.current_version ?? 1),
+    name: String(source.name ?? "未命名场景"),
+    description: String(source.description ?? ""),
+    environmentId: asOptionalNumber(source.environment_id ?? source.environmentId),
+    tags: asArray(source.tags).map(String),
+    steps: asArray(source.steps).map(mapStep),
+    datasets: asArray(source.datasets).map(mapDataset),
+    createdAt: String(source.created_at ?? source.createdAt ?? ""),
+    updatedAt: String(source.updated_at ?? source.updatedAt ?? ""),
+    lastRunAt: source.last_run_at ? String(source.last_run_at) : undefined,
+  };
+}
+
+function mapStepResult(value: unknown, index: number): ScenarioStepResult {
+  const source = asRecord(value);
+  const duration = Number(source.duration_ms ?? source.duration ?? 0);
+  return {
+    stepId: String(source.step_id ?? source.id ?? `STEP-${index + 1}`),
+    name: String(source.name ?? source.step_name ?? `步骤 ${index + 1}`),
+    status: String(source.status ?? "failed") as ScenarioStepStatus,
+    durationMs: Number.isFinite(duration) ? duration : 0,
+    message: String(source.message ?? source.error_message ?? source.error ?? ""),
+  };
+}
+
+function mapRun(value: unknown, projectId: number): ScenarioRun {
+  const source = asRecord(value);
+  const duration = Number(source.duration_ms ?? source.duration ?? 0);
+  return {
+    id: String(source.id ?? source.run_id ?? ""),
+    scenarioId: String(source.scenario_id ?? ""),
+    scenarioName: String(source.scenario_name ?? source.name ?? "未命名场景"),
+    projectId: Number(source.project_id ?? projectId),
+    environmentId: asOptionalNumber(source.environment_id),
+    environmentName: source.environment_name ? String(source.environment_name) : undefined,
+    datasetName: String(source.dataset_name ?? source.dataset_id ?? "空变量"),
+    status: String(source.status ?? "running") as ScenarioRunStatus,
+    startedAt: String(source.started_at ?? source.created_at ?? ""),
+    finishedAt: source.finished_at ? String(source.finished_at) : undefined,
+    durationMs: Number.isFinite(duration) ? duration : 0,
+    stepResults: asArray(source.step_results ?? source.steps ?? source.results).map(mapStepResult),
+  };
+}
+
+function parseJsonObject(value: string, label: string) {
+  const parsed = JSON.parse(value || "{}") as unknown;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`${label}必须是 JSON 对象`);
+  }
+  return parsed as Record<string, unknown>;
+}
+
+function scenarioPayload(input: TestScenario) {
+  return {
+    name: input.name,
+    description: input.description || null,
+    environment_id: input.environmentId,
+    tags: input.tags,
+    steps: input.steps.map((step) => ({
+      id: step.id,
+      kind: step.kind,
+      reference_id: step.referenceId === undefined ? null : Number(step.referenceId),
+      name: step.name,
+      method: step.method,
+      path: step.path,
+      config: parseJsonObject(step.configText, `步骤“${step.name}”配置`),
+      continue_on_failure: step.continueOnFailure,
+    })),
+    datasets: input.datasets.map((dataset) => ({
+      id: dataset.id,
+      name: dataset.name,
+      enabled: dataset.enabled,
+      variables: parseJsonObject(dataset.variablesText, `数据集“${dataset.name}”变量`),
+    })),
   };
 }
 
 export function emptyScenario(projectId: number, environmentId?: number): TestScenario {
-  const now = new Date().toISOString();
   return {
-    id: scenarioUniqueId("SCN"),
+    id: "",
     projectId,
+    version: 0,
     name: "未命名测试场景",
     description: "",
     environmentId,
     tags: [],
     steps: [],
     datasets: [{ id: scenarioUniqueId("DATA"), name: "默认数据", enabled: true, variablesText: "{}" }],
-    createdAt: now,
-    updatedAt: now,
+    createdAt: "",
+    updatedAt: "",
   };
 }
 
-export function listScenarios(projectId: number) {
-  return readStorage<TestScenario[]>(scenarioKey(projectId), []).map((item) => normalizeScenario(item, projectId));
+export async function listScenarios(projectId: number, keyword?: string) {
+  const result = await requestWithAuth<BackendRecord[] | PaginatedResult>(
+    `/scenarios?${buildQuery({ project_id: projectId, keyword, page_size: 200 })}`,
+  );
+  return unwrapItems(result).map((item) => mapScenario(item, projectId));
+}
+
+export async function getScenario(projectId: number, scenarioId: string | number) {
+  const result = await requestWithAuth<BackendRecord>(`/scenarios/${scenarioId}?project_id=${projectId}`);
+  return mapScenario(result, projectId);
+}
+
+export async function createScenario(projectId: number, input: TestScenario) {
+  const result = await requestWithAuth<BackendRecord>(`/scenarios?project_id=${projectId}`, {
+    method: "POST",
+    body: JSON.stringify(scenarioPayload(input)),
+  });
+  return mapScenario(result, projectId);
+}
+
+export async function updateScenario(projectId: number, input: TestScenario) {
+  const result = await requestWithAuth<BackendRecord>(`/scenarios/${input.id}?project_id=${projectId}`, {
+    method: "PUT",
+    body: JSON.stringify({ ...scenarioPayload(input), version: input.version }),
+  });
+  return mapScenario(result, projectId);
 }
 
 export function saveScenario(projectId: number, input: TestScenario) {
-  const scenarios = listScenarios(projectId);
-  const existing = scenarios.find((item) => item.id === input.id);
-  const scenario = normalizeScenario({
-    ...input,
-    projectId,
-    createdAt: existing?.createdAt ?? input.createdAt,
-    updatedAt: new Date().toISOString(),
-  }, projectId);
-  writeStorage(scenarioKey(projectId), [scenario, ...scenarios.filter((item) => item.id !== scenario.id)]);
-  return scenario;
+  return input.id ? updateScenario(projectId, input) : createScenario(projectId, input);
 }
 
 export function duplicateScenario(projectId: number, source: TestScenario) {
-  return saveScenario(projectId, {
+  return createScenario(projectId, {
     ...source,
-    id: scenarioUniqueId("SCN"),
+    id: "",
+    version: 0,
     name: `${source.name} - 副本`,
     steps: source.steps.map((step) => ({ ...step, id: scenarioUniqueId("STEP") })),
     datasets: source.datasets.map((dataset) => ({ ...dataset, id: scenarioUniqueId("DATA") })),
@@ -162,53 +271,34 @@ export function duplicateScenario(projectId: number, source: TestScenario) {
 }
 
 export function deleteScenario(projectId: number, scenarioId: string) {
-  writeStorage(scenarioKey(projectId), listScenarios(projectId).filter((item) => item.id !== scenarioId));
+  return requestWithAuth<unknown>(`/scenarios/${scenarioId}?project_id=${projectId}`, { method: "DELETE" });
 }
 
-export function listScenarioRuns(projectId: number) {
-  return readStorage<ScenarioRun[]>(runKey(projectId), []);
+export async function listScenarioRuns(projectId: number, scenarioId?: string) {
+  const result = await requestWithAuth<BackendRecord[] | PaginatedResult>(
+    `/scenario-runs?${buildQuery({ project_id: projectId, scenario_id: scenarioId })}`,
+  );
+  return unwrapItems(result).map((item) => mapRun(item, projectId));
 }
 
-export function clearScenarioRuns(projectId: number, scenarioId?: string) {
-  writeStorage(runKey(projectId), scenarioId ? listScenarioRuns(projectId).filter((run) => run.scenarioId !== scenarioId) : []);
+export async function getScenarioRun(projectId: number, runId: string | number) {
+  const result = await requestWithAuth<BackendRecord>(`/scenario-runs/${runId}?project_id=${projectId}`);
+  return mapRun(result, projectId);
 }
 
-export function runScenario(projectId: number, scenario: TestScenario, environmentName?: string) {
-  const startedAt = new Date();
-  const datasets = scenario.datasets.filter((item) => item.enabled);
-  const runDatasets = datasets.length > 0 ? datasets : scenario.datasets.slice(0, 1);
-  const runs = runDatasets.map((dataset, datasetIndex): ScenarioRun => {
-    let stopped = false;
-    const stepResults = scenario.steps.map((step, index): ScenarioStepResult => {
-      if (stopped) {
-        return { stepId: step.id, name: step.name, status: "failed", durationMs: 0, message: "前序步骤失败，未执行" };
-      }
-      const failed = step.name.includes("失败") || step.configText.includes("\"simulateFailure\": true");
-      if (failed && !step.continueOnFailure) stopped = true;
-      return {
-        stepId: step.id,
-        name: step.name,
-        status: failed ? "failed" : "passed",
-        durationMs: step.kind === "delay" ? 1000 : 350 + index * 120,
-        message: failed ? "模拟执行失败" : "执行通过",
-      };
-    });
-    const durationMs = stepResults.reduce((total, result) => total + result.durationMs, 0);
-    return {
-      id: scenarioUniqueId("SRUN"),
-      scenarioId: scenario.id,
-      scenarioName: scenario.name,
-      projectId,
-      environmentId: scenario.environmentId,
-      environmentName,
-      datasetName: dataset?.name ?? `默认数据 ${datasetIndex + 1}`,
-      status: stepResults.some((result) => result.status === "failed") ? "failed" : "passed",
-      startedAt: new Date(startedAt.getTime() + datasetIndex).toISOString(),
-      durationMs,
-      stepResults,
-    };
+export async function runScenario(
+  projectId: number,
+  scenario: TestScenario,
+  options: { environmentId?: number; datasetIds?: string[]; idempotencyKey?: string } = {},
+) {
+  const result = await requestWithAuth<unknown>(`/scenarios/${scenario.id}/execute?project_id=${projectId}`, {
+    method: "POST",
+    body: JSON.stringify({
+      environment_id: options.environmentId,
+      dataset_ids: options.datasetIds,
+      idempotency_key: options.idempotencyKey ?? scenarioUniqueId("scenario-run"),
+    }),
   });
-  writeStorage(runKey(projectId), [...runs, ...listScenarioRuns(projectId)].slice(0, 200));
-  saveScenario(projectId, { ...scenario, lastRunAt: runs[0]?.startedAt ?? startedAt.toISOString() });
-  return runs;
+  const items = Array.isArray(result) ? result : asArray(asRecord(result).items ?? asRecord(result).runs ?? result);
+  return items.map((item) => mapRun(item, projectId));
 }

@@ -2,10 +2,11 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { listTestCases, listWebSocketTestCases, type BackendTestCase } from "../api/apiCases";
 import type { EnvironmentOption } from "../api/projects";
 import {
-  clearScenarioRuns,
   deleteScenario,
   duplicateScenario,
   emptyScenario,
+  getScenario,
+  getScenarioRun,
   listScenarioRuns,
   listScenarios,
   runScenario,
@@ -87,19 +88,26 @@ export function ScenariosPage({
   const [scenarioSearch, setScenarioSearch] = useState("");
   const [assetLoading, setAssetLoading] = useState(false);
   const [assetError, setAssetError] = useState("");
+  const [busy, setBusy] = useState(false);
 
-  const reload = useCallback(() => {
+  const reload = useCallback(async () => {
     if (!projectId) {
       setScenarios([]);
       setRuns([]);
       return;
     }
-    setScenarios(listScenarios(projectId));
-    setRuns(listScenarioRuns(projectId));
-  }, [projectId]);
+    const [scenarioResult, runResult] = await Promise.allSettled([
+      listScenarios(projectId),
+      listScenarioRuns(projectId),
+    ]);
+    if (scenarioResult.status === "fulfilled") setScenarios(scenarioResult.value);
+    if (runResult.status === "fulfilled") setRuns(runResult.value);
+    const failure = [scenarioResult, runResult].find((result) => result.status === "rejected");
+    if (failure?.status === "rejected") onAction(failure.reason instanceof Error ? failure.reason.message : "场景数据加载失败");
+  }, [onAction, projectId]);
 
   useEffect(() => {
-    reload();
+    void reload();
     setDraft(undefined);
     setSelectedStepId(undefined);
     setTab("design");
@@ -143,10 +151,19 @@ export function ScenariosPage({
     { label: "调试失败", value: runs.filter((item) => item.status === "failed").length, icon: "error", tone: "red" },
   ], [runs, scenarios]);
 
-  const selectScenario = (scenario: TestScenario) => {
-    setDraft(structuredClone(scenario));
-    setSelectedStepId(scenario.steps[0]?.id);
-    setTab("design");
+  const selectScenario = async (scenario: TestScenario) => {
+    if (!projectId) return;
+    setBusy(true);
+    try {
+      const detail = await getScenario(projectId, scenario.id);
+      setDraft(detail);
+      setSelectedStepId(detail.steps[0]?.id);
+      setTab("design");
+    } catch (error) {
+      onAction(error instanceof Error ? error.message : "场景详情加载失败");
+    } finally {
+      setBusy(false);
+    }
   };
 
   const createScenario = () => {
@@ -187,7 +204,7 @@ export function ScenariosPage({
     if (selectedStepId === stepId) setSelectedStepId(steps[0]?.id);
   };
 
-  const persist = () => {
+  const persist = async () => {
     if (!projectId || !draft) return;
     if (!draft.name.trim()) return onAction("请输入场景名称");
     if (draft.steps.length === 0) return onAction("请至少添加一个场景步骤");
@@ -209,41 +226,71 @@ export function ScenariosPage({
         return onAction(`数据集“${dataset.name}”变量不是合法 JSON`);
       }
     }
-    const saved = saveScenario(projectId, { ...draft, name: draft.name.trim(), description: draft.description.trim() });
-    reload();
-    setDraft(saved);
-    onAction(`已保存场景 ${saved.name}`);
+    setBusy(true);
+    try {
+      const saved = await saveScenario(projectId, { ...draft, name: draft.name.trim(), description: draft.description.trim() });
+      await reload();
+      setDraft(saved);
+      onAction(`已保存场景 ${saved.name}`);
+    } catch (error) {
+      onAction(error instanceof Error ? error.message : "场景保存失败");
+    } finally {
+      setBusy(false);
+    }
   };
 
-  const copyCurrent = () => {
+  const copyCurrent = async () => {
     if (!projectId || !draft || !scenarios.some((item) => item.id === draft.id)) return;
-    const copied = duplicateScenario(projectId, draft);
-    reload();
-    selectScenario(copied);
-    onAction(`已复制场景 ${draft.name}`);
+    setBusy(true);
+    try {
+      const copied = await duplicateScenario(projectId, draft);
+      await reload();
+      setDraft(copied);
+      setSelectedStepId(copied.steps[0]?.id);
+      onAction(`已复制场景 ${draft.name}`);
+    } catch (error) {
+      onAction(error instanceof Error ? error.message : "场景复制失败");
+    } finally {
+      setBusy(false);
+    }
   };
 
-  const deleteCurrent = () => {
+  const deleteCurrent = async () => {
     if (!projectId || !draft || !scenarios.some((item) => item.id === draft.id) || !window.confirm(`确定删除场景“${draft.name}”吗？`)) return;
-    deleteScenario(projectId, draft.id);
-    reload();
-    setDraft(undefined);
-    setSelectedStepId(undefined);
-    onAction(`已删除场景 ${draft.name}`);
+    setBusy(true);
+    try {
+      await deleteScenario(projectId, draft.id);
+      await reload();
+      setDraft(undefined);
+      setSelectedStepId(undefined);
+      onAction(`已删除场景 ${draft.name}`);
+    } catch (error) {
+      onAction(error instanceof Error ? error.message : "场景删除失败");
+    } finally {
+      setBusy(false);
+    }
   };
 
-  const execute = () => {
+  const execute = async () => {
     if (!projectId || !draft) return onAction("请先选择场景");
     if (draft.steps.length === 0) return onAction("场景没有可执行步骤");
     if (!draft.environmentId) return onAction("请选择执行环境");
-    const saved = saveScenario(projectId, draft);
-    const environment = environments.find((item) => item.id === saved.environmentId);
-    const scenarioRuns = runScenario(projectId, saved, environment?.name);
-    const latestRun = scenarioRuns[0];
-    reload();
-    setDraft({ ...saved, lastRunAt: latestRun?.startedAt });
-    setTab("history");
-    onAction(`场景 ${saved.name} 已运行 ${scenarioRuns.length} 组数据，${scenarioRuns.some((run) => run.status === "failed") ? "存在失败" : "全部通过"}`);
+    setBusy(true);
+    try {
+      const saved = await saveScenario(projectId, draft);
+      const scenarioRuns = await runScenario(projectId, saved, { environmentId: saved.environmentId });
+      const detailedRuns = await Promise.all(scenarioRuns.map((run) => getScenarioRun(projectId, run.id).catch(() => run)));
+      await reload();
+      const latestRun = detailedRuns[0];
+      setRuns((current) => [...detailedRuns, ...current.filter((run) => !detailedRuns.some((item) => item.id === run.id))]);
+      setDraft({ ...saved, lastRunAt: latestRun?.startedAt });
+      setTab("history");
+      onAction(`场景 ${saved.name} 已运行 ${detailedRuns.length} 组数据，${detailedRuns.some((run) => run.status === "failed" || run.status === "timeout") ? "存在失败" : "全部通过"}`);
+    } catch (error) {
+      onAction(error instanceof Error ? error.message : "场景执行失败");
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
@@ -256,10 +303,10 @@ export function ScenariosPage({
           <button className={tab === "history" ? "active" : ""} onClick={() => setTab("history")} type="button">调试记录</button>
         </div>
         <div className="scenario-actions">
-          <button className="btn" disabled={!draft || !scenarios.some((item) => item.id === draft.id)} onClick={copyCurrent} type="button"><Icon name="content_copy" />复制</button>
-          <button className="btn danger" disabled={!draft || !scenarios.some((item) => item.id === draft.id)} onClick={deleteCurrent} type="button"><Icon name="delete" />删除</button>
-          <button className="btn" disabled={!draft} onClick={persist} type="button"><Icon name="save" />保存场景</button>
-          <button className="btn primary" disabled={!draft} onClick={execute} type="button"><Icon name="play_arrow" />运行场景</button>
+          <button className="btn" disabled={busy || !draft || !scenarios.some((item) => item.id === draft.id)} onClick={copyCurrent} type="button"><Icon name="content_copy" />复制</button>
+          <button className="btn danger" disabled={busy || !draft || !scenarios.some((item) => item.id === draft.id)} onClick={deleteCurrent} type="button"><Icon name="delete" />删除</button>
+          <button className="btn" disabled={busy || !draft} onClick={persist} type="button"><Icon name="save" />保存场景</button>
+          <button className="btn primary" disabled={busy || !draft} onClick={execute} type="button"><Icon name="play_arrow" />运行场景</button>
         </div>
       </div>
 
@@ -272,7 +319,7 @@ export function ScenariosPage({
           <div className="scenario-panel-head"><div><span className="eyebrow">Scenarios</span><h3>场景列表</h3></div><button className="icon-btn" disabled={!projectId} onClick={createScenario} title="新建场景" type="button"><Icon name="add" /></button></div>
           <label className="scenario-search"><Icon name="search" /><input onChange={(event) => setScenarioSearch(event.target.value)} placeholder="搜索场景" value={scenarioSearch} /></label>
           <div className="scenario-list">
-            {filteredScenarios.map((scenario) => <button className={draft?.id === scenario.id ? "scenario-list-item active" : "scenario-list-item"} key={scenario.id} onClick={() => selectScenario(scenario)} type="button"><span><strong>{scenario.name}</strong><small>{scenario.steps.length} 步骤 · {scenario.datasets.length} 数据集</small></span><Icon name="chevron_right" /></button>)}
+            {filteredScenarios.map((scenario) => <button className={draft?.id === scenario.id ? "scenario-list-item active" : "scenario-list-item"} disabled={busy} key={scenario.id} onClick={() => void selectScenario(scenario)} type="button"><span><strong>{scenario.name}</strong><small>{scenario.steps.length} 步骤 · {scenario.datasets.length} 数据集 · v{scenario.version}</small></span><Icon name="chevron_right" /></button>)}
             {filteredScenarios.length === 0 && <div className="scenario-empty-mini"><Icon name="account_tree" /><span>{scenarios.length ? "没有匹配场景" : "暂无场景"}</span><button disabled={!projectId} onClick={createScenario} type="button">新建场景</button></div>}
           </div>
 
@@ -296,7 +343,7 @@ export function ScenariosPage({
             </header>
             {tab === "design" && <DesignTab draft={draft} moveStep={moveStep} onAddFirst={() => addStep(builtInAssets[1])} onRemove={removeStep} onSelect={setSelectedStepId} selectedStepId={selectedStepId} />}
             {tab === "data" && <DataTab draft={draft} onChange={(datasets) => patchDraft({ datasets })} />}
-            {tab === "history" && <HistoryTab onClear={() => { if (projectId) { clearScenarioRuns(projectId, draft.id); reload(); } }} runs={runs.filter((run) => run.scenarioId === draft.id)} />}
+            {tab === "history" && <HistoryTab runs={runs.filter((run) => run.scenarioId === draft.id)} />}
           </>}
         </main>
 
@@ -351,8 +398,8 @@ function DataTab({ draft, onChange }: { draft: TestScenario; onChange: (datasets
   </div>;
 }
 
-function HistoryTab({ onClear, runs }: { onClear: () => void; runs: ScenarioRun[] }) {
-  return <div className="scenario-history-tab"><div className="panel-title"><div><h3>调试记录</h3><p className="scenario-muted">展示当前场景的本地模拟运行结果</p></div><button className="btn" disabled={runs.length === 0} onClick={onClear} type="button">清空全部记录</button></div>
+function HistoryTab({ runs }: { runs: ScenarioRun[] }) {
+  return <div className="scenario-history-tab"><div className="panel-title"><div><h3>调试记录</h3><p className="scenario-muted">展示当前场景的真实后端执行结果</p></div></div>
     {runs.length === 0 ? <div className="scenario-lane-empty"><Icon name="history" /><h3>暂无调试记录</h3><p>保存并运行场景后，步骤执行结果会显示在这里。</p></div> : <div className="scenario-run-list">{runs.map((run) => <article className="scenario-run-card" key={run.id}><header><div><span className={`status ${run.status === "passed" ? "status-通过" : "status-失败"}`}>{run.status}</span><strong>{run.environmentName ?? "未命名环境"} · {run.datasetName}</strong></div><small>{formatDate(run.startedAt)} · {(run.durationMs / 1000).toFixed(1)}s</small></header><div>{run.stepResults.map((result, index) => <span key={result.stepId}><b>{index + 1}</b><strong>{result.name}</strong><small>{result.message}</small><i className={result.status}>{result.status}</i></span>)}</div></article>)}</div>}
   </div>;
 }

@@ -1,4 +1,4 @@
-import { executeUnsavedFlow, validateFlowDefinition, type FlowDefinition, type FlowNode } from "./flows";
+import { deleteFlow, executeUnsavedFlow, validateFlowDefinition, type FlowDefinition, type FlowNode } from "./flows";
 
 function node(id: string, kind: FlowNode["kind"]): FlowNode {
   return {
@@ -113,6 +113,20 @@ describe("validateFlowDefinition", () => {
     expect(fetchMock).toHaveBeenCalledWith(
       "http://127.0.0.1:8000/api/v1/flows/execute-unsaved?project_id=1&environment_id=2",
       expect.objectContaining({ method: "POST", body: JSON.stringify({ definition: flow }) }),
+    );
+  });
+
+  it("deletes a saved flow in the current project", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      json: async () => ({ code: 0, message: "ok", data: null }),
+    } as Response);
+
+    await deleteFlow(1, 12);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:8000/api/v1/flows/12?project_id=1",
+      expect.objectContaining({ method: "DELETE" }),
     );
   });
 

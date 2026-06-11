@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { FlowPage } from "./FlowPage";
 
 describe("FlowPage", () => {
@@ -104,5 +104,44 @@ describe("FlowPage", () => {
 
     expect(JSON.parse(String((editor as HTMLTextAreaElement).value))).toEqual({ path: "/flow-login" });
     expect(screen.getAllByText("/login").length).toBeGreaterThan(0);
+  });
+
+  it("confirms before deleting a saved flow", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ code: 0, message: "ok", data: [] }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ code: 0, message: "ok", data: [] }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          code: 0,
+          message: "ok",
+          data: [{ id: 12, name: "支付回归流程", description: "", node_count: 2 }],
+        }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ code: 0, message: "ok", data: null }),
+      } as Response);
+    const onAction = vi.fn();
+    render(<FlowPage onAction={onAction} projectId={1} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "删除流程 支付回归流程" }));
+    expect(screen.getByRole("dialog", { name: "确认删除该可视化流程？" })).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+
+    fireEvent.click(screen.getByRole("button", { name: "确认删除" }));
+
+    await waitFor(() => expect(screen.queryByText("支付回归流程")).not.toBeInTheDocument());
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "http://127.0.0.1:8000/api/v1/flows/12?project_id=1",
+      expect.objectContaining({ method: "DELETE" }),
+    );
+    expect(onAction).toHaveBeenCalledWith("已删除流程 支付回归流程");
   });
 });

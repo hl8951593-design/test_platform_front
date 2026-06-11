@@ -1,13 +1,13 @@
 import { type ChangeEvent, type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { listTestCases, listWebSocketTestCases, type BackendTestCase } from "../api/apiCases";
-import { listFlows, type FlowSummary } from "../api/flows";
 import {
   clearPlanRuns,
   deletePlan,
   deletePlanRun,
   duplicatePlan,
+  exportPlans,
   importPlans,
   listPlanRuns,
+  listPlanSchedule,
   listPlans,
   runPlan,
   savePlan,
@@ -15,12 +15,13 @@ import {
   type PlanExecutionMode,
   type PlanFailurePolicy,
   type PlanRun,
+  type PlanSchedule,
   type PlanTarget,
-  type PlanTargetKind,
   type PlanTriggerType,
   type TestPlan,
 } from "../api/plans";
 import type { EnvironmentOption } from "../api/projects";
+import { listScenarios, type TestScenario } from "../api/scenarios";
 import { Icon } from "../components/Icon";
 import type { ActionHandler } from "../types";
 
@@ -29,11 +30,13 @@ type PlanStatusFilter = "all" | "enabled" | "disabled";
 type PlanEditorMode = "create" | "edit";
 type PlanForm = {
   id: string;
+  version: number;
   name: string;
   description: string;
   enabled: boolean;
   triggerType: PlanTriggerType;
   cronExpression: string;
+  scheduleTimezone: string;
   webhookEvent: string;
   environmentIds: number[];
   targets: PlanTarget[];
@@ -47,11 +50,13 @@ type PlanForm = {
 
 const emptyForm = (environmentId?: number): PlanForm => ({
   id: "",
+  version: 0,
   name: "",
   description: "",
   enabled: true,
   triggerType: "manual",
   cronExpression: "0 2 * * *",
+  scheduleTimezone: "Asia/Shanghai",
   webhookEvent: "push",
   environmentIds: environmentId ? [environmentId] : [],
   targets: [],
@@ -63,10 +68,6 @@ const emptyForm = (environmentId?: number): PlanForm => ({
   tagText: "",
 });
 
-function uniqueId(prefix: string) {
-  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-}
-
 function formatDate(value?: string) {
   if (!value) return "-";
   const date = new Date(value);
@@ -75,33 +76,15 @@ function formatDate(value?: string) {
     : date.toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
 }
 
-function unwrapCases(result: unknown): BackendTestCase[] {
-  if (Array.isArray(result)) return result;
-  if (!result || typeof result !== "object") return [];
-  const source = result as { data?: unknown; items?: unknown; records?: unknown; results?: unknown };
-  const list = source.data ?? source.items ?? source.records ?? source.results;
-  return Array.isArray(list) ? list as BackendTestCase[] : [];
-}
-
-function caseTarget(source: BackendTestCase, index: number, kind: PlanTargetKind): PlanTarget {
+function scenarioTarget(source: TestScenario): PlanTarget {
   return {
-    id: `${kind}-${String(source.id ?? source.test_case_id ?? index)}`,
-    referenceId: source.id as string | number ?? source.test_case_id as string | number ?? index,
-    kind,
-    name: String(source.name ?? source.title ?? "未命名测试用例"),
-    method: kind === "websocket_case" ? "WS" : String(source.method ?? "GET").toUpperCase(),
-    path: String(source.path ?? source.url ?? ""),
-  };
-}
-
-function flowTarget(flow: FlowSummary): PlanTarget {
-  return {
-    id: `flow-${flow.id}`,
-    referenceId: flow.id,
-    kind: "flow",
-    name: flow.name,
-    method: "FLOW",
-    path: `${flow.nodeCount} 个节点`,
+    id: `scenario-${source.id}`,
+    referenceId: source.id,
+    kind: "scenario",
+    name: source.name,
+    method: "SCENARIO",
+    path: `${source.steps.length} 个步骤 · ${source.datasets.length} 个数据集`,
+    scenarioVersion: source.version,
   };
 }
 
@@ -119,10 +102,6 @@ function triggerLabel(plan: TestPlan) {
   return "手动触发";
 }
 
-function targetKindLabel(kind: PlanTargetKind) {
-  return kind === "flow" ? "流程" : kind === "websocket_case" ? "WebSocket" : "HTTP";
-}
-
 function downloadJson(filename: string, value: unknown) {
   const url = URL.createObjectURL(new Blob([JSON.stringify(value, null, 2)], { type: "application/json" }));
   const anchor = document.createElement("a");
@@ -132,33 +111,17 @@ function downloadJson(filename: string, value: unknown) {
   URL.revokeObjectURL(url);
 }
 
-function calendarEntries(plans: TestPlan[]) {
-  const scheduled = plans.filter((plan) => plan.enabled && plan.triggerType === "cron");
-  const matchesField = (field: string, value: number) => {
-    if (!field || field === "*") return true;
-    return field.split(",").some((part) => {
-      if (part.startsWith("*/")) {
-        const interval = Number(part.slice(2));
-        return Number.isFinite(interval) && interval > 0 && value % interval === 0;
-      }
-      const [start, end] = part.split("-").map(Number);
-      if (Number.isFinite(start) && Number.isFinite(end)) return value >= start && value <= end;
-      return Number(part) === value;
-    });
-  };
-  const matchesDate = (plan: TestPlan, date: Date) => {
-    const [, , day = "*", month = "*", weekday = "*"] = plan.cronExpression.trim().split(/\s+/);
-    return matchesField(day, date.getDate())
-      && matchesField(month, date.getMonth() + 1)
-      && matchesField(weekday, date.getDay());
-  };
+function calendarEntries(schedule: PlanSchedule[]) {
   return Array.from({ length: 14 }, (_, offset) => {
     const date = new Date();
     date.setHours(0, 0, 0, 0);
     date.setDate(date.getDate() + offset);
     return {
       date,
-      plans: scheduled.filter((plan) => matchesDate(plan, date)),
+      schedules: schedule.filter((item) => {
+        const scheduledAt = new Date(item.scheduledAt);
+        return !Number.isNaN(scheduledAt.getTime()) && scheduledAt.toDateString() === date.toDateString();
+      }),
     };
   });
 }
@@ -177,6 +140,7 @@ export function PlansPage({
   const [activeTab, setActiveTab] = useState<PlansTab>("list");
   const [plans, setPlans] = useState<TestPlan[]>([]);
   const [runs, setRuns] = useState<PlanRun[]>([]);
+  const [schedule, setSchedule] = useState<PlanSchedule[]>([]);
   const [assets, setAssets] = useState<PlanTarget[]>([]);
   const [assetsLoading, setAssetsLoading] = useState(false);
   const [assetError, setAssetError] = useState("");
@@ -192,21 +156,30 @@ export function PlansPage({
   const importRef = useRef<HTMLInputElement>(null);
   const projectEnvironments = environments ?? [];
 
-  const reloadLocalData = useCallback(() => {
+  const reloadData = useCallback(async () => {
     if (!projectId) {
       setPlans([]);
       setRuns([]);
+      setSchedule([]);
       return;
     }
-    setPlans(listPlans(projectId));
-    setRuns(listPlanRuns(projectId));
-  }, [projectId]);
+    const [plansResult, runsResult, scheduleResult] = await Promise.allSettled([
+      listPlans(projectId),
+      listPlanRuns(projectId),
+      listPlanSchedule(projectId),
+    ]);
+    if (plansResult.status === "fulfilled") setPlans(plansResult.value);
+    if (runsResult.status === "fulfilled") setRuns(runsResult.value);
+    if (scheduleResult.status === "fulfilled") setSchedule(scheduleResult.value);
+    const failure = [plansResult, runsResult, scheduleResult].find((result) => result.status === "rejected");
+    if (failure?.status === "rejected") onAction(failure.reason instanceof Error ? failure.reason.message : "测试计划数据加载失败");
+  }, [onAction, projectId]);
 
   useEffect(() => {
-    reloadLocalData();
+    void reloadData();
     setEditorMode(null);
     setRunDialogPlan(undefined);
-  }, [reloadLocalData]);
+  }, [reloadData]);
 
   useEffect(() => {
     setRunEnvironmentId(environmentId);
@@ -221,22 +194,13 @@ export function PlansPage({
     let ignore = false;
     setAssetsLoading(true);
     setAssetError("");
-    void Promise.allSettled([listTestCases(projectId), listWebSocketTestCases(projectId), listFlows(projectId)])
-      .then(([httpResult, websocketResult, flowResult]) => {
+    void listScenarios(projectId)
+      .then((result) => {
         if (ignore) return;
-        const nextAssets = [
-          ...(httpResult.status === "fulfilled"
-            ? unwrapCases(httpResult.value).map((item, index) => caseTarget(item, index, "api_case"))
-            : []),
-          ...(websocketResult.status === "fulfilled"
-            ? unwrapCases(websocketResult.value).map((item, index) => caseTarget(item, index, "websocket_case"))
-            : []),
-          ...(flowResult.status === "fulfilled" ? flowResult.value.map(flowTarget) : []),
-        ];
-        setAssets(nextAssets);
-        if ([httpResult, websocketResult, flowResult].every((result) => result.status === "rejected")) {
-          setAssetError("执行资产加载失败，仍可维护已有计划。");
-        }
+        setAssets(result.map(scenarioTarget));
+      })
+      .catch((error) => {
+        if (!ignore) setAssetError(error instanceof Error ? error.message : "场景资产加载失败");
       })
       .finally(() => {
         if (!ignore) setAssetsLoading(false);
@@ -286,66 +250,87 @@ export function PlansPage({
     setEditorMode("edit");
   };
 
-  const submitPlan = (event: FormEvent<HTMLFormElement>) => {
+  const submitPlan = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!projectId) return setFormMessage("请先选择项目");
     if (!form.name.trim()) return setFormMessage("请输入计划名称");
     if (form.environmentIds.length === 0) return setFormMessage("请至少选择一个执行环境");
-    if (form.targets.length === 0) return setFormMessage("请至少选择一个测试用例或流程");
+    if (form.targets.length === 0) return setFormMessage("请至少选择一个测试场景");
     if (form.triggerType === "cron" && !form.cronExpression.trim()) return setFormMessage("请输入 Cron 表达式");
     if (form.triggerType === "webhook" && !form.webhookEvent.trim()) return setFormMessage("请输入 Webhook 事件");
 
-    const plan = savePlan(projectId, {
-      id: form.id || uniqueId("PLN"),
-      name: form.name.trim(),
-      description: form.description.trim(),
-      enabled: form.enabled,
-      triggerType: form.triggerType,
-      cronExpression: form.cronExpression.trim(),
-      webhookEvent: form.webhookEvent.trim(),
-      environmentIds: form.environmentIds,
-      targets: form.targets,
-      executionMode: form.executionMode,
-      failurePolicy: form.failurePolicy,
-      retryCount: form.retryCount,
-      timeoutMinutes: form.timeoutMinutes,
-      notificationEmails: form.notificationText.split(",").map((item) => item.trim()).filter(Boolean),
-      tags: form.tagText.split(",").map((item) => item.trim()).filter(Boolean),
-    });
-    reloadLocalData();
-    setEditorMode(null);
-    onAction(`${editorMode === "create" ? "新建" : "保存"}计划 ${plan.name}`);
+    try {
+      const plan = await savePlan(projectId, {
+        id: form.id,
+        version: form.version,
+        name: form.name.trim(),
+        description: form.description.trim(),
+        enabled: form.enabled,
+        triggerType: form.triggerType,
+        cronExpression: form.cronExpression.trim(),
+        scheduleTimezone: form.scheduleTimezone,
+        webhookEvent: form.webhookEvent.trim(),
+        environmentIds: form.environmentIds,
+        targets: form.targets,
+        executionMode: form.executionMode,
+        failurePolicy: form.failurePolicy,
+        retryCount: form.retryCount,
+        timeoutMinutes: form.timeoutMinutes,
+        notificationEmails: form.notificationText.split(",").map((item) => item.trim()).filter(Boolean),
+        tags: form.tagText.split(",").map((item) => item.trim()).filter(Boolean),
+      });
+      await reloadData();
+      setEditorMode(null);
+      onAction(`${editorMode === "create" ? "新建" : "保存"}计划 ${plan.name}`);
+    } catch (error) {
+      setFormMessage(error instanceof Error ? error.message : "测试计划保存失败");
+    }
   };
 
-  const togglePlan = (plan: TestPlan) => {
+  const togglePlan = async (plan: TestPlan) => {
     if (!projectId) return;
-    setPlanEnabled(projectId, plan.id, !plan.enabled);
-    reloadLocalData();
-    onAction(`${plan.name} 已${plan.enabled ? "停用" : "启用"}`);
+    try {
+      await setPlanEnabled(projectId, plan, !plan.enabled);
+      await reloadData();
+      onAction(`${plan.name} 已${plan.enabled ? "停用" : "启用"}`);
+    } catch (error) {
+      onAction(error instanceof Error ? error.message : "计划状态更新失败");
+    }
   };
 
-  const removePlan = (plan: TestPlan) => {
+  const removePlan = async (plan: TestPlan) => {
     if (!projectId || !window.confirm(`确定删除测试计划“${plan.name}”吗？`)) return;
-    deletePlan(projectId, plan.id);
-    reloadLocalData();
-    onAction(`删除计划 ${plan.name}`);
+    try {
+      await deletePlan(projectId, plan.id);
+      await reloadData();
+      onAction(`删除计划 ${plan.name}`);
+    } catch (error) {
+      onAction(error instanceof Error ? error.message : "计划删除失败");
+    }
   };
 
-  const copyPlan = (plan: TestPlan) => {
+  const copyPlan = async (plan: TestPlan) => {
     if (!projectId) return;
-    duplicatePlan(projectId, plan);
-    reloadLocalData();
-    onAction(`复制计划 ${plan.name}`);
+    try {
+      await duplicatePlan(projectId, plan);
+      await reloadData();
+      onAction(`复制计划 ${plan.name}`);
+    } catch (error) {
+      onAction(error instanceof Error ? error.message : "计划复制失败");
+    }
   };
 
-  const executePlan = () => {
-    if (!projectId || !runDialogPlan) return;
-    const environment = projectEnvironments.find((item) => item.id === runEnvironmentId);
-    runPlan(projectId, runDialogPlan, runEnvironmentId, environment?.name);
-    reloadLocalData();
-    setRunDialogPlan(undefined);
-    setActiveTab("history");
-    onAction(`运行计划 ${runDialogPlan.name}`);
+  const executePlan = async () => {
+    if (!projectId || !runDialogPlan || !runEnvironmentId) return;
+    try {
+      await runPlan(projectId, runDialogPlan, runEnvironmentId);
+      await reloadData();
+      setRunDialogPlan(undefined);
+      setActiveTab("history");
+      onAction(`计划 ${runDialogPlan.name} 已进入执行队列`);
+    } catch (error) {
+      onAction(error instanceof Error ? error.message : "计划执行失败");
+    }
   };
 
   const importFile = async (event: ChangeEvent<HTMLInputElement>) => {
@@ -353,8 +338,8 @@ export function PlansPage({
     event.target.value = "";
     if (!file || !projectId) return;
     try {
-      const imported = importPlans(projectId, JSON.parse(await file.text()));
-      reloadLocalData();
+      const imported = await importPlans(projectId, JSON.parse(await file.text()));
+      await reloadData();
       onAction(`导入 ${imported.length} 个测试计划`);
     } catch (error) {
       onAction(error instanceof Error ? error.message : "测试计划导入失败");
@@ -372,7 +357,14 @@ export function PlansPage({
         </div>
         <div className="plans-toolbar-actions">
           <button className="btn" disabled={!projectId} onClick={() => importRef.current?.click()} type="button"><Icon name="upload_file" />导入</button>
-          <button className="btn" disabled={!projectId || plans.length === 0} onClick={() => downloadJson(`test-plans-${projectId}.json`, { version: "1.0", plans })} type="button"><Icon name="download" />导出</button>
+          <button className="btn" disabled={!projectId || plans.length === 0} onClick={async () => {
+            if (!projectId) return;
+            try {
+              downloadJson(`test-plans-${projectId}.json`, await exportPlans(projectId));
+            } catch (error) {
+              onAction(error instanceof Error ? error.message : "测试计划导出失败");
+            }
+          }} type="button"><Icon name="download" />导出</button>
           <button className="btn primary" disabled={!projectId} onClick={startCreate} type="button"><Icon name="add" />新建计划</button>
         </div>
       </div>
@@ -427,19 +419,16 @@ export function PlansPage({
         </>
       )}
 
-      {activeTab === "calendar" && <ScheduleCalendar environments={projectEnvironments} plans={plans} />}
+      {activeTab === "calendar" && <ScheduleCalendar environments={projectEnvironments} plans={plans} schedule={schedule} />}
       {activeTab === "history" && (
         <RunHistory
           onClear={() => {
             if (!projectId || runs.length === 0 || !window.confirm("确定清空当前项目的计划执行历史吗？")) return;
-            clearPlanRuns(projectId);
-            reloadLocalData();
-            onAction("已清空计划执行历史");
+            void clearPlanRuns(projectId).then(reloadData).then(() => onAction("已清空计划执行历史")).catch((error) => onAction(error instanceof Error ? error.message : "执行历史清理失败"));
           }}
           onDelete={(run) => {
             if (!projectId) return;
-            deletePlanRun(projectId, run.id);
-            reloadLocalData();
+            void deletePlanRun(projectId, run.id).then(reloadData).catch((error) => onAction(error instanceof Error ? error.message : "执行记录删除失败"));
           }}
           runs={runs}
         />
@@ -527,7 +516,7 @@ function PlanCard({
 
 function PlanEmpty({ hasPlans, hasProject, onCreate }: { hasPlans: boolean; hasProject: boolean; onCreate: () => void }) {
   return (
-    <div className="list-state empty"><span className="list-state-icon"><Icon name={hasPlans ? "filter_alt_off" : "event_note"} /></span><h4>{hasPlans ? "没有匹配的测试计划" : "暂无测试计划"}</h4><p>{hasProject ? hasPlans ? "调整搜索或筛选条件后重试。" : "创建计划，组合测试用例与可视化流程并配置运行策略。" : "请先从顶部选择项目。"}</p>{hasProject && !hasPlans && <button className="btn primary" onClick={onCreate} type="button"><Icon name="add" />新建计划</button>}</div>
+    <div className="list-state empty"><span className="list-state-icon"><Icon name={hasPlans ? "filter_alt_off" : "event_note"} /></span><h4>{hasPlans ? "没有匹配的测试计划" : "暂无测试计划"}</h4><p>{hasProject ? hasPlans ? "调整搜索或筛选条件后重试。" : "创建计划，组合已保存的测试场景并配置运行策略。" : "请先从顶部选择项目。"}</p>{hasProject && !hasPlans && <button className="btn primary" onClick={onCreate} type="button"><Icon name="add" />新建计划</button>}</div>
   );
 }
 
@@ -582,11 +571,11 @@ function PlanEditor({
               <label className="plan-field full"><span>计划说明</span><textarea onChange={(event) => patch("description", event.target.value)} placeholder="说明计划目标与执行范围" value={form.description} /></label>
             </div></div>
             <div className="plan-form-section"><div className="plan-section-head"><h4>执行环境 *</h4><span className="plan-section-count">{form.environmentIds.length} 已选</span></div><div className="plan-choice-grid">{environments.map((environment) => { const selected = form.environmentIds.includes(environment.id); return <button className={selected ? "plan-choice selected" : "plan-choice"} key={environment.id} onClick={() => toggleEnvironment(environment.id)} type="button"><Icon name="cloud" /><span><strong>{environment.name}</strong><small>{environment.baseUrl || "未配置 Base URL"}</small></span><span className={selected ? "plan-choice-check visible" : "plan-choice-check"}><Icon name="check_circle" /></span></button> })}{environments.length === 0 && <p className="plan-empty-copy">当前项目暂无环境，请先创建环境配置。</p>}</div></div>
-            <div className="plan-form-section"><div className="plan-section-head"><div><h4>执行目标 *</h4><small className="plan-section-hint">点击资产加入执行队列</small></div><div className="plan-section-tools"><span className="plan-section-count">{form.targets.length} 已选</span><label className="inline-field"><Icon name="search" /><input onChange={(event) => onAssetSearch(event.target.value)} placeholder="搜索用例或流程" value={assetSearch} /></label></div></div>{assetError && <p className="form-message">{assetError}</p>}<div className="plan-assets">{assetsLoading ? <p className="plan-empty-copy">正在加载执行资产...</p> : assets.map((asset) => <button className={form.targets.some((item) => item.id === asset.id) ? "plan-asset selected" : "plan-asset"} key={asset.id} onClick={() => toggleTarget(asset)} type="button"><b>{asset.method}</b><span><strong>{asset.name}</strong><small>{targetKindLabel(asset.kind)} · {asset.path || "无路径"}</small></span><Icon name={form.targets.some((item) => item.id === asset.id) ? "check_circle" : "add_circle"} /></button>)}{!assetsLoading && assets.length === 0 && <p className="plan-empty-copy">暂无匹配的测试用例或流程。</p>}</div></div>
+            <div className="plan-form-section"><div className="plan-section-head"><div><h4>执行目标 *</h4><small className="plan-section-hint">点击场景加入执行队列</small></div><div className="plan-section-tools"><span className="plan-section-count">{form.targets.length} 已选</span><label className="inline-field"><Icon name="search" /><input onChange={(event) => onAssetSearch(event.target.value)} placeholder="搜索测试场景" value={assetSearch} /></label></div></div>{assetError && <p className="form-message">{assetError}</p>}<div className="plan-assets">{assetsLoading ? <p className="plan-empty-copy">正在加载测试场景...</p> : assets.map((asset) => <button className={form.targets.some((item) => item.id === asset.id) ? "plan-asset selected" : "plan-asset"} key={asset.id} onClick={() => toggleTarget(asset)} type="button"><b>{asset.method}</b><span><strong>{asset.name}</strong><small>场景 v{asset.scenarioVersion ?? "-"} · {asset.path || "无说明"}</small></span><Icon name={form.targets.some((item) => item.id === asset.id) ? "check_circle" : "add_circle"} /></button>)}{!assetsLoading && assets.length === 0 && <p className="plan-empty-copy">暂无可绑定的测试场景。</p>}</div></div>
           </section>
           <aside className="plan-editor-side">
-            <div className="plan-form-section"><div className="plan-section-head"><div><h4>已选执行顺序</h4><small className="plan-section-hint">使用箭头调整执行顺序</small></div><span className="plan-section-count">{form.targets.length} 项</span></div><div className="selected-targets">{form.targets.map((target, index) => <div className="selected-target" key={target.id}><b>{index + 1}</b><span><strong>{target.name}</strong><small>{target.method} · {targetKindLabel(target.kind)}</small></span><button disabled={index === 0} onClick={() => moveTarget(index, -1)} title="上移" type="button"><Icon name="arrow_upward" /></button><button disabled={index === form.targets.length - 1} onClick={() => moveTarget(index, 1)} title="下移" type="button"><Icon name="arrow_downward" /></button><button className="danger" onClick={() => toggleTarget(target)} title="移除" type="button"><Icon name="close" /></button></div>)}{form.targets.length === 0 && <div className="plan-empty-selection"><Icon name="playlist_add" /><strong>尚未选择执行目标</strong><span>从左侧选择用例或流程，它们会按加入顺序执行</span></div>}</div></div>
-            <div className="plan-form-section"><h4>触发与执行策略</h4><label className="plan-field"><span>触发方式</span><select onChange={(event) => patch("triggerType", event.target.value as PlanTriggerType)} value={form.triggerType}><option value="manual">手动触发</option><option value="cron">Cron 定时</option><option value="webhook">Webhook</option></select></label>{form.triggerType === "cron" && <label className="plan-field"><span>Cron 表达式</span><input onChange={(event) => patch("cronExpression", event.target.value)} value={form.cronExpression} /></label>}{form.triggerType === "webhook" && <label className="plan-field"><span>Webhook 事件</span><input onChange={(event) => patch("webhookEvent", event.target.value)} value={form.webhookEvent} /></label>}<div className="plan-form-grid"><label className="plan-field"><span>执行模式</span><select onChange={(event) => patch("executionMode", event.target.value as PlanExecutionMode)} value={form.executionMode}><option value="serial">串行</option><option value="parallel">并行</option></select></label><label className="plan-field"><span>失败策略</span><select onChange={(event) => patch("failurePolicy", event.target.value as PlanFailurePolicy)} value={form.failurePolicy}><option value="stop">失败后停止</option><option value="continue">失败后继续</option></select></label><label className="plan-field"><span>失败重试次数</span><input min="0" onChange={(event) => patch("retryCount", Number(event.target.value))} type="number" value={form.retryCount} /></label><label className="plan-field"><span>超时分钟数</span><input min="1" onChange={(event) => patch("timeoutMinutes", Number(event.target.value))} type="number" value={form.timeoutMinutes} /></label></div><label className="plan-field"><span>通知邮箱</span><input onChange={(event) => patch("notificationText", event.target.value)} placeholder="qa@example.com, owner@example.com" value={form.notificationText} /></label><label className="plan-enable-toggle"><input checked={form.enabled} onChange={(event) => patch("enabled", event.target.checked)} type="checkbox" /><span><strong>保存后启用计划</strong><small>停用计划不会被定时或 Webhook 触发</small></span></label></div>
+            <div className="plan-form-section"><div className="plan-section-head"><div><h4>已选执行顺序</h4><small className="plan-section-hint">使用箭头调整执行顺序</small></div><span className="plan-section-count">{form.targets.length} 项</span></div><div className="selected-targets">{form.targets.map((target, index) => <div className="selected-target" key={target.id}><b>{index + 1}</b><span><strong>{target.name}</strong><small>SCENARIO · v{target.scenarioVersion ?? "-"}</small></span><button disabled={index === 0} onClick={() => moveTarget(index, -1)} title="上移" type="button"><Icon name="arrow_upward" /></button><button disabled={index === form.targets.length - 1} onClick={() => moveTarget(index, 1)} title="下移" type="button"><Icon name="arrow_downward" /></button><button className="danger" onClick={() => toggleTarget(target)} title="移除" type="button"><Icon name="close" /></button></div>)}{form.targets.length === 0 && <div className="plan-empty-selection"><Icon name="playlist_add" /><strong>尚未选择执行目标</strong><span>从左侧选择场景，它们会按加入顺序执行</span></div>}</div></div>
+            <div className="plan-form-section"><h4>触发与执行策略</h4><label className="plan-field"><span>触发方式</span><select onChange={(event) => patch("triggerType", event.target.value as PlanTriggerType)} value={form.triggerType}><option value="manual">手动触发</option><option value="cron">Cron 定时</option><option value="webhook">Webhook</option></select></label>{form.triggerType === "cron" && <><label className="plan-field"><span>Cron 表达式</span><input onChange={(event) => patch("cronExpression", event.target.value)} value={form.cronExpression} /></label><label className="plan-field"><span>调度时区</span><input onChange={(event) => patch("scheduleTimezone", event.target.value)} value={form.scheduleTimezone} /></label></>}{form.triggerType === "webhook" && <label className="plan-field"><span>Webhook 事件</span><input onChange={(event) => patch("webhookEvent", event.target.value)} value={form.webhookEvent} /></label>}<div className="plan-form-grid"><label className="plan-field"><span>执行模式</span><select onChange={(event) => patch("executionMode", event.target.value as PlanExecutionMode)} value={form.executionMode}><option value="serial">串行</option><option value="parallel">并行</option></select></label><label className="plan-field"><span>失败策略</span><select onChange={(event) => patch("failurePolicy", event.target.value as PlanFailurePolicy)} value={form.failurePolicy}><option value="stop">失败后停止</option><option value="continue">失败后继续</option></select></label><label className="plan-field"><span>失败重试次数</span><input max="10" min="0" onChange={(event) => patch("retryCount", Number(event.target.value))} type="number" value={form.retryCount} /></label><label className="plan-field"><span>超时分钟数</span><input max="1440" min="1" onChange={(event) => patch("timeoutMinutes", Number(event.target.value))} type="number" value={form.timeoutMinutes} /></label></div><label className="plan-field"><span>通知邮箱</span><input onChange={(event) => patch("notificationText", event.target.value)} placeholder="qa@example.com, owner@example.com" value={form.notificationText} /></label><label className="plan-enable-toggle"><input checked={form.enabled} onChange={(event) => patch("enabled", event.target.checked)} type="checkbox" /><span><strong>保存后启用计划</strong><small>停用计划不会被定时或 Webhook 触发</small></span></label></div>
           </aside>
         </div>
         {message && <p className="plan-form-message">{message}</p>}
@@ -597,10 +586,10 @@ function PlanEditor({
   );
 }
 
-function ScheduleCalendar({ environments, plans }: { environments: EnvironmentOption[]; plans: TestPlan[] }) {
-  const entries = calendarEntries(plans);
+function ScheduleCalendar({ environments, plans, schedule }: { environments: EnvironmentOption[]; plans: TestPlan[]; schedule: PlanSchedule[] }) {
+  const entries = calendarEntries(schedule);
   return (
-    <article className="panel plan-calendar-panel"><div className="panel-title"><div><h3>未来 14 天调度</h3><p className="plan-panel-hint">展示已启用的 Cron 测试计划</p></div><span className="status status-通过">{plans.filter((plan) => plan.enabled && plan.triggerType === "cron").length} 个定时计划</span></div><div className="plan-calendar">{entries.map(({ date, plans: dayPlans }) => <section className={date.toDateString() === new Date().toDateString() ? "plan-calendar-day today" : "plan-calendar-day"} key={date.toISOString()}><header><strong>{date.toLocaleDateString("zh-CN", { weekday: "short" })}</strong><span>{date.getMonth() + 1}/{date.getDate()}</span></header><div>{dayPlans.map((plan) => <article key={plan.id}><b>{plan.name}</b><small>{plan.cronExpression}</small><span>{plan.environmentIds.map((id) => environments.find((item) => item.id === id)?.name ?? id).join(" · ")}</span></article>)}{dayPlans.length === 0 && <p>无调度</p>}</div></section>)}</div></article>
+    <article className="panel plan-calendar-panel"><div className="panel-title"><div><h3>未来 14 天调度</h3><p className="plan-panel-hint">展示后端生成的真实 Cron 调度实例</p></div><span className="status status-通过">{plans.filter((plan) => plan.enabled && plan.triggerType === "cron").length} 个定时计划</span></div><div className="plan-calendar">{entries.map(({ date, schedules }) => <section className={date.toDateString() === new Date().toDateString() ? "plan-calendar-day today" : "plan-calendar-day"} key={date.toISOString()}><header><strong>{date.toLocaleDateString("zh-CN", { weekday: "short" })}</strong><span>{date.getMonth() + 1}/{date.getDate()}</span></header><div>{schedules.map((item) => <article key={item.id}><b>{item.planName}</b><small>{formatDate(item.scheduledAt)}</small><span>{item.environmentName ?? environments.find((environment) => environment.id === item.environmentId)?.name ?? "全部计划环境"}</span></article>)}{schedules.length === 0 && <p>无调度</p>}</div></section>)}</div></article>
   );
 }
 

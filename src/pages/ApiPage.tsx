@@ -234,6 +234,23 @@ function mapEnvironmentVariable(source: BackendEnvironmentVariable, index: numbe
   };
 }
 
+function joinEnvironmentUrl(prefix: string, path: string) {
+  if (!prefix) return path;
+  if (!path) return prefix;
+  return `${prefix.replace(/\/+$/, "")}/${path.replace(/^\/+/, "")}`;
+}
+
+function buildCaseEditorUrl(apiCase: ApiCase, environment?: EnvironmentOption) {
+  const path = apiCase.path.trim();
+  if (!path || /^(?:https?|wss?):\/\//i.test(path) || path.startsWith("{{")) return apiCase.path;
+
+  const hostVariable = environment?.variables?.find(
+    (variable) => variable.name.trim().toLowerCase() === "host",
+  );
+  const prefix = hostVariable ? `{{${hostVariable.name}}}` : environment?.baseUrl ?? "";
+  return joinEnvironmentUrl(prefix, apiCase.path);
+}
+
 function getEnvironmentName(environmentId: number | undefined, environments: EnvironmentOption[]) {
   if (!environmentId) return "未分组";
   return environments.find((item) => item.id === environmentId)?.name ?? "未分组";
@@ -585,6 +602,7 @@ export function ApiPage({
   const [deletingVariableId, setDeletingVariableId] = useState<string | null>(null);
   const [runningCaseIds, setRunningCaseIds] = useState<string[]>([]);
   const [deletingCaseIds, setDeletingCaseIds] = useState<string[]>([]);
+  const [deleteCandidate, setDeleteCandidate] = useState<ApiCase | null>(null);
   const [runFeedback, setRunFeedback] = useState<RunFeedback | null>(null);
   const loadRequestId = useRef(0);
   const canCreateCase = useMemo(
@@ -603,13 +621,9 @@ export function ApiPage({
       const titleMatched = !titleKeyword || item.name.toLowerCase().includes(titleKeyword);
       const methodMatched = methodFilters.length === 0 || methodFilters.includes(item.method);
       const statusMatched = statusFilter === "all" || item.status === statusFilter;
-      const environmentMatched =
-        !environmentId ||
-        item.environmentIds.includes(environmentId) ||
-        (item.protocol === "websocket" && item.environmentIds.length === 0 && /^wss?:\/\//i.test(item.path));
-      return titleMatched && methodMatched && statusMatched && environmentMatched;
+      return titleMatched && methodMatched && statusMatched;
     });
-  }, [caseTitleQuery, cases, environmentId, methodFilters, statusFilter]);
+  }, [caseTitleQuery, cases, methodFilters, statusFilter]);
   const hasActiveFilters = Boolean(caseTitleQuery.trim()) || methodFilters.length > 0 || statusFilter !== "all";
   const getCaseEnvironmentNames = (apiCase: ApiCase) => {
     const names = apiCase.environmentIds
@@ -748,10 +762,14 @@ export function ApiPage({
     setAiExpandCase(apiCase);
   }, [onAction, projectId]);
 
-  const deleteCase = useCallback(async (apiCase: ApiCase, event: MouseEvent<HTMLButtonElement>) => {
+  const requestDeleteCase = useCallback((apiCase: ApiCase, event: MouseEvent<HTMLButtonElement>) => {
     event.stopPropagation();
     if (!apiCase.backendId || !projectId || deletingCaseIds.includes(apiCase.id)) return;
+    setDeleteCandidate(apiCase);
+  }, [deletingCaseIds, projectId]);
 
+  const deleteCase = useCallback(async (apiCase: ApiCase) => {
+    if (!apiCase.backendId || !projectId || deletingCaseIds.includes(apiCase.id)) return;
     setDeletingCaseIds((current) => [...current, apiCase.id]);
     try {
       if (apiCase.protocol === "websocket") {
@@ -766,6 +784,7 @@ export function ApiPage({
         message: `${apiCase.name} 已删除`,
         status: "success",
       });
+      setDeleteCandidate(null);
     } catch (error) {
       const message = error instanceof Error ? error.message : "删除失败，请稍后重试";
       setRunFeedback({
@@ -1178,11 +1197,11 @@ export function ApiPage({
                     <button
                       className="btn delete-case-btn"
                       disabled={deletingCaseIds.includes(item.id) || runningCaseIds.includes(item.id)}
-                      onClick={(event) => deleteCase(item, event)}
+                      onClick={(event) => requestDeleteCase(item, event)}
                       type="button"
                     >
-                      <Icon name={deletingCaseIds.includes(item.id) ? "progress_activity" : "delete"} />
-                      {deletingCaseIds.includes(item.id) ? "删除中..." : "删除"}
+                      <Icon name="delete" />
+                      删除
                     </button>
                   </div>
                 </td>
@@ -1248,6 +1267,46 @@ export function ApiPage({
           variableListError={variableListError}
           variables={environmentVariables}
         />
+      )}
+      {deleteCandidate && (
+        <div className="modal-backdrop" role="presentation">
+          <section
+            aria-labelledby="delete-case-dialog-title"
+            aria-modal="true"
+            className="delete-case-confirm-modal"
+            role="dialog"
+          >
+            <div className="delete-case-confirm-icon">
+              <Icon name="delete" />
+            </div>
+            <div>
+              <span className="eyebrow">删除确认</span>
+              <h3 id="delete-case-dialog-title">确认删除该测试用例？</h3>
+              <p>
+                即将删除“{deleteCandidate.name}”。删除后无法恢复，请确认是否继续。
+              </p>
+            </div>
+            <div className="modal-actions">
+              <button
+                className="btn"
+                disabled={deletingCaseIds.includes(deleteCandidate.id)}
+                onClick={() => setDeleteCandidate(null)}
+                type="button"
+              >
+                取消
+              </button>
+              <button
+                className="btn danger"
+                disabled={deletingCaseIds.includes(deleteCandidate.id)}
+                onClick={() => void deleteCase(deleteCandidate)}
+                type="button"
+              >
+                <Icon name={deletingCaseIds.includes(deleteCandidate.id) ? "progress_activity" : "delete"} />
+                {deletingCaseIds.includes(deleteCandidate.id) ? "删除中..." : "确认删除"}
+              </button>
+            </div>
+          </section>
+        </div>
       )}
     </section>
   );
@@ -2048,15 +2107,39 @@ function EnvironmentVariableModal({
 
 function DebugResponsePanel({ result }: { result: DebugExecutionView }) {
   const [activeDebugTab, setActiveDebugTab] = useState<DebugResponseTab>("body");
+  const [formattedResponseBody, setFormattedResponseBody] = useState(result.responseBody);
+  const [formatMessage, setFormatMessage] = useState("");
   const statusClass =
     String(result.statusCode ?? "").startsWith("2") || result.status === "passed" ? "passed" : "failed";
   const debugTabs: Array<{ id: DebugResponseTab; label: string; content: string }> = [
     { id: "request", label: "请求快照", content: result.requestSnapshot },
     { id: "headers", label: "响应头", content: result.responseHeaders },
-    { id: "body", label: "响应 Body", content: result.responseBody },
+    { id: "body", label: "响应 Body", content: formattedResponseBody },
     { id: "assertions", label: "断言结果", content: result.assertionResults },
   ];
   const activeDebugContent = debugTabs.find((item) => item.id === activeDebugTab) ?? debugTabs[0];
+  const canFormatResponseBody = (() => {
+    try {
+      JSON.parse(formattedResponseBody);
+      return true;
+    } catch {
+      return false;
+    }
+  })();
+
+  useEffect(() => {
+    setFormattedResponseBody(result.responseBody);
+    setFormatMessage("");
+  }, [result.responseBody]);
+
+  const formatResponseBody = () => {
+    try {
+      setFormattedResponseBody(JSON.stringify(JSON.parse(formattedResponseBody), null, 2));
+      setFormatMessage("JSON 已格式化");
+    } catch (error) {
+      setFormatMessage(error instanceof Error ? `无法格式化：${error.message}` : "响应内容不是有效 JSON");
+    }
+  };
 
   return (
     <div className="debug-response-panel">
@@ -2092,7 +2175,22 @@ function DebugResponsePanel({ result }: { result: DebugExecutionView }) {
         }`}
         role="tabpanel"
       >
-        <span>{activeDebugContent.label}</span>
+        <div className="code-editor-toolbar">
+          <div>
+            <span>{activeDebugContent.label}</span>
+            {activeDebugContent.id === "body" && (
+              <small className={canFormatResponseBody ? "json-valid" : "json-plain"}>
+                {formatMessage || (canFormatResponseBody ? "有效 JSON" : "文本响应")}
+              </small>
+            )}
+          </div>
+          {activeDebugContent.id === "body" && canFormatResponseBody && (
+            <button className="json-format-btn" onClick={formatResponseBody} type="button">
+              <Icon name="data_object" />
+              格式化 JSON
+            </button>
+          )}
+        </div>
         <pre>{activeDebugContent.content}</pre>
       </div>
       {result.createdAt && <small className="debug-created-at">执行时间：{result.createdAt}</small>}
@@ -2124,15 +2222,20 @@ function ApiCaseEditorModal({
   onSave: (nextCase: ApiCase, mode: EditorMode, payload: AnyTestCaseSavePayload) => Promise<void>;
 }) {
   const [name, setName] = useState(apiCase.name);
+  const initialEnvironmentId = apiCase.environmentIds[0] ?? environmentId;
   const [selectedEnvironmentIds, setSelectedEnvironmentIds] = useState<number[]>(
     apiCase.environmentIds.length > 0 ? apiCase.environmentIds : environmentId ? [environmentId] : [],
   );
   const [status, setStatus] = useState<ApiCase["status"]>(apiCase.status);
   const [method, setMethod] = useState(apiCase.method);
-  const [url, setUrl] = useState(
-    apiCase.path.startsWith("http") || apiCase.path.startsWith("ws") || !apiCase.path
-      ? apiCase.path
-      : `${apiCase.protocol === "websocket" ? "wss" : "https"}://api.testauto.local${apiCase.path}`,
+  const [url, setUrl] = useState(() =>
+    buildCaseEditorUrl(
+      apiCase,
+      environments.find((item) => item.id === initialEnvironmentId),
+    ),
+  );
+  const isAutoComposedUrl = useRef(
+    Boolean(apiCase.path) && !/^(?:https?|wss?):\/\//i.test(apiCase.path) && !apiCase.path.startsWith("{{"),
   );
   const [activeTab, setActiveTab] = useState<EditorTab>(apiCase.protocol === "websocket" ? "message" : "params");
   const [params, setParams] = useState<KeyValueRow[]>(apiCase.params ?? []);
@@ -2164,6 +2267,16 @@ function ApiCaseEditorModal({
   const debugEnvironmentId = environmentId && selectedEnvironmentIds.includes(environmentId)
     ? environmentId
     : selectedEnvironmentIds[0];
+  const selectedUrlEnvironment = environments.find((item) => item.id === debugEnvironmentId);
+  const editorEnvironmentVariableOptions = useMemo(
+    () => Array.from(new Set([
+      ...(selectedUrlEnvironment?.variables ?? [])
+        .filter((variable) => variable.name.trim())
+        .map((variable) => `{{${variable.name}}}`),
+      ...environmentVariableOptions,
+    ])),
+    [environmentVariableOptions, selectedUrlEnvironment],
+  );
   const selectedEnvironmentNames = selectedEnvironmentIds
     .map((id) => environments.find((item) => item.id === id)?.name)
     .filter((name): name is string => Boolean(name));
@@ -2207,6 +2320,11 @@ function ApiCaseEditorModal({
     const socket = liveWebSocketRef.current;
     if (socket && (socket.readyState === 0 || socket.readyState === 1)) socket.close(1000, "Editor closed");
   }, []);
+
+  useEffect(() => {
+    if (!isAutoComposedUrl.current) return;
+    setUrl(buildCaseEditorUrl(apiCase, selectedUrlEnvironment));
+  }, [apiCase, selectedUrlEnvironment]);
 
   const connectLiveWebSocket = () => {
     if (liveWebSocketStatus === "connecting" || liveWebSocketStatus === "connected") return;
@@ -2583,7 +2701,10 @@ function ApiCaseEditorModal({
           )}
           <input
             onBlur={() => apiCase.protocol === "http" && applyGetUrlQuery(url)}
-            onChange={(event) => setUrl(event.target.value)}
+            onChange={(event) => {
+              isAutoComposedUrl.current = false;
+              setUrl(event.target.value);
+            }}
             placeholder={apiCase.protocol === "websocket" ? "请输入 WebSocket 地址，例如 wss://example.com/ws" : "请输入接口地址或路径，例如 /api/v1/users"}
             value={url}
           />
@@ -2601,7 +2722,7 @@ function ApiCaseEditorModal({
         <div className="tab-panel">
           {activeTab === "params" && apiCase.protocol === "http" && (
             <KeyValueEditor
-              environmentVariableOptions={environmentVariableOptions}
+              environmentVariableOptions={editorEnvironmentVariableOptions}
               onLoadVariableOptions={onLoadVariableOptions}
               onAdd={() => setParams((current) => [...current, { key: "", value: "", enabled: true }])}
               onChange={updateParams}
@@ -2612,7 +2733,7 @@ function ApiCaseEditorModal({
           )}
           {activeTab === "headers" && (
             <HeaderEditor
-              environmentVariableOptions={environmentVariableOptions}
+              environmentVariableOptions={editorEnvironmentVariableOptions}
               onLoadVariableOptions={onLoadVariableOptions}
               onAdd={() => setHeaders((current) => [...current, { key: "", value: "", enabled: true }])}
               onChange={updateHeaders}
@@ -2634,10 +2755,15 @@ function ApiCaseEditorModal({
                 </label>
               </div>
               {bodyType === "JSON" && (
-                <div className="single-editor">
-                  <div className="json-toolbar">
-                    <span>{jsonError ? "JSON 格式异常" : "JSON 格式正常"}</span>
-                    <button className="btn" onClick={formatJsonBody} type="button">
+                <div className="single-editor json-body-editor">
+                  <div className="code-editor-toolbar">
+                    <div>
+                      <span>JSON 请求体</span>
+                      <small className={jsonError ? "json-invalid" : "json-valid"}>
+                        {jsonError ? "JSON 格式异常" : jsonBody.trim() ? "JSON 格式正常" : "可留空，表示无请求体"}
+                      </small>
+                    </div>
+                    <button className="json-format-btn" disabled={!jsonBody.trim()} onClick={formatJsonBody} type="button">
                       <Icon name="data_object" />
                       格式化 JSON
                     </button>
@@ -2653,7 +2779,7 @@ function ApiCaseEditorModal({
               )}
               {bodyType === "Form Data" && (
                 <BodyKeyValueEditor
-                  environmentVariableOptions={environmentVariableOptions}
+                  environmentVariableOptions={editorEnvironmentVariableOptions}
                   onLoadVariableOptions={onLoadVariableOptions}
                   onAdd={() => setFormBody((current) => [...current, { key: "", value: "", enabled: true }])}
                   onChange={updateFormBody}
@@ -2664,7 +2790,7 @@ function ApiCaseEditorModal({
               )}
               {bodyType === "x-www-form-urlencoded" && (
                 <BodyKeyValueEditor
-                  environmentVariableOptions={environmentVariableOptions}
+                  environmentVariableOptions={editorEnvironmentVariableOptions}
                   onLoadVariableOptions={onLoadVariableOptions}
                   onAdd={() => setUrlEncodedBody((current) => [...current, { key: "", value: "", enabled: true }])}
                   onChange={updateUrlEncodedBody}
@@ -2879,7 +3005,7 @@ function KeyValueEditor({
             </tr>
           )}
           {rows.map((row, index) => (
-            <tr key={`${row.key}-${index}`}>
+            <tr key={index}>
               <td><input onChange={(event) => onChange(index, "key", event.target.value)} value={row.key} /></td>
               <td>
                 <ComboInput
@@ -2967,7 +3093,7 @@ function HeaderEditor({
             const valueOptions = Array.from(new Set([...(commonHeaderValues[row.key] ?? []), ...environmentVariableOptions]));
 
             return (
-              <tr key={`${row.key}-${index}`}>
+              <tr key={index}>
                 <td>
                   <ComboInput
                     onChange={(value) => updateKey(index, value, row.value)}
@@ -3056,7 +3182,7 @@ function BodyKeyValueEditor({
             </tr>
           )}
           {rows.map((row, index) => (
-            <tr key={`${row.key}-${index}`}>
+            <tr key={index}>
               <td><input onChange={(event) => onChange(index, "key", event.target.value)} value={row.key} /></td>
               <td>
                 <ComboInput

@@ -50,7 +50,20 @@ export interface BackendEnvironment {
   description?: string | null;
   is_default?: boolean;
   is_active?: boolean;
+  variables?: Array<{
+    id?: number | string;
+    name?: string;
+    value?: string;
+    is_secret?: boolean;
+  }>;
   [key: string]: unknown;
+}
+
+export interface EnvironmentVariableOption {
+  id: string;
+  name: string;
+  value: string;
+  isSecret: boolean;
 }
 
 export interface EnvironmentOption {
@@ -59,6 +72,7 @@ export interface EnvironmentOption {
   baseUrl: string;
   description: string;
   isDefault: boolean;
+  variables?: EnvironmentVariableOption[];
 }
 
 type ProjectListResult = BackendProject[] | { data?: BackendProject[]; items?: BackendProject[]; records?: BackendProject[] };
@@ -136,6 +150,14 @@ export function mapEnvironment(environment: BackendEnvironment): EnvironmentOpti
     baseUrl: environment.base_url ?? "",
     description: environment.description ?? "",
     isDefault: environment.is_default === true,
+    variables: Array.isArray(environment.variables)
+      ? environment.variables.map((variable, index) => ({
+          id: String(variable.id ?? `${variable.name ?? "variable"}-${index}`),
+          name: variable.name ?? "",
+          value: variable.value ?? "",
+          isSecret: variable.is_secret === true,
+        }))
+      : [],
   };
 }
 

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type
 import { listTestCases, listWebSocketTestCases, type BackendTestCase } from "../api/apiCases";
 import {
   createFlow,
+  deleteFlow,
   executeUnsavedFlow,
   getFlow,
   listFlows,
@@ -194,6 +195,8 @@ export function FlowPage({
   const [loadingAssets, setLoadingAssets] = useState(false);
   const [saving, setSaving] = useState(false);
   const [running, setRunning] = useState(false);
+  const [deleteCandidate, setDeleteCandidate] = useState<FlowSummary>();
+  const [deletingFlowId, setDeletingFlowId] = useState<string>();
   const [dragging, setDragging] = useState<{ id: string; offsetX: number; offsetY: number }>();
   const [connectionPointer, setConnectionPointer] = useState<{ x: number; y: number }>();
   const [invalidLocalConfigs, setInvalidLocalConfigs] = useState<Set<string>>(() => new Set());
@@ -511,6 +514,28 @@ export function FlowPage({
     }
   };
 
+  const removeSavedFlow = async () => {
+    if (!projectId || !deleteCandidate || deletingFlowId) return;
+    const candidate = deleteCandidate;
+    setDeletingFlowId(String(candidate.id));
+    try {
+      await deleteFlow(projectId, candidate.id);
+      setFlows((current) => current.filter((item) => String(item.id) !== String(candidate.id)));
+      if (String(flow.id ?? "") === String(candidate.id)) {
+        setFlow(emptyFlow(projectId, environmentId));
+        setSelectedNodeId(undefined);
+        setConnectingFrom(undefined);
+        setInvalidLocalConfigs(new Set());
+      }
+      setDeleteCandidate(undefined);
+      notify(`已删除流程 ${candidate.name}`);
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "流程删除失败");
+    } finally {
+      setDeletingFlowId(undefined);
+    }
+  };
+
   const removeEdge = (edgeId: string) => {
     setFlow((current) => {
       const edge = current.edges.find((item) => item.id === edgeId);
@@ -586,7 +611,33 @@ export function FlowPage({
               </button>
             ))}
           </div>
-          {flows.length > 0 && <div className="flow-panel-section"><strong>已保存流程</strong>{flows.map((item) => <button className="saved-flow-item" key={item.id} onClick={() => void loadSavedFlow(item)} type="button"><Icon name="account_tree" /><span>{item.name}<small>{item.nodeCount} 节点</small></span></button>)}</div>}
+          {flows.length > 0 && (
+            <div className="flow-panel-section">
+              <strong>已保存流程</strong>
+              {flows.map((item) => (
+                <div className="saved-flow-item" key={item.id}>
+                  <button
+                    aria-label={`打开流程 ${item.name}`}
+                    className="saved-flow-open"
+                    onClick={() => void loadSavedFlow(item)}
+                    type="button"
+                  >
+                    <Icon name="account_tree" />
+                    <span>{item.name}<small>{item.nodeCount} 节点</small></span>
+                  </button>
+                  <button
+                    aria-label={`删除流程 ${item.name}`}
+                    className="saved-flow-delete"
+                    onClick={() => setDeleteCandidate(item)}
+                    title="删除流程"
+                    type="button"
+                  >
+                    <Icon name="delete" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
         </aside>
 
         <div className="canvas-panel flow-canvas-panel">
@@ -709,6 +760,30 @@ export function FlowPage({
         </aside>
       </div>
       {message && <span className="flow-inline-message">{message}</span>}
+      {deleteCandidate && (
+        <div className="modal-backdrop" role="presentation">
+          <section
+            aria-labelledby="delete-flow-dialog-title"
+            aria-modal="true"
+            className="delete-flow-confirm-modal"
+            role="dialog"
+          >
+            <div className="delete-flow-confirm-icon"><Icon name="delete" /></div>
+            <div>
+              <span className="eyebrow">删除确认</span>
+              <h3 id="delete-flow-dialog-title">确认删除该可视化流程？</h3>
+              <p>即将删除“{deleteCandidate.name}”。流程配置删除后无法恢复，请确认是否继续。</p>
+            </div>
+            <div className="modal-actions">
+              <button className="btn" disabled={Boolean(deletingFlowId)} onClick={() => setDeleteCandidate(undefined)} type="button">取消</button>
+              <button className="btn danger" disabled={Boolean(deletingFlowId)} onClick={() => void removeSavedFlow()} type="button">
+                <Icon name={deletingFlowId ? "progress_activity" : "delete"} />
+                {deletingFlowId ? "删除中..." : "确认删除"}
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
     </section>
   );
 }
