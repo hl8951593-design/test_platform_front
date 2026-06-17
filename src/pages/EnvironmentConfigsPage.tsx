@@ -14,6 +14,8 @@ import {
   type BackendEnvironmentVariable,
 } from "../api/environmentConfigs";
 import { Icon } from "../components/Icon";
+import { ConfirmDialog } from "../components/ConfirmDialog";
+import { Pagination, usePagination } from "../components/Pagination";
 import type { ActionHandler } from "../types";
 
 interface EnvironmentView {
@@ -45,6 +47,10 @@ interface BoundCaseView {
   status: string;
   updatedAt: string;
 }
+
+type PendingEnvironmentDelete = {
+  environment: EnvironmentView;
+};
 
 function toNumber(value: unknown) {
   if (typeof value === "number") return value;
@@ -121,10 +127,13 @@ export function EnvironmentConfigsPage({
   const [boundCasesLoading, setBoundCasesLoading] = useState(false);
   const [boundCasesError, setBoundCasesError] = useState("");
   const [revealedSecrets, setRevealedSecrets] = useState<Record<number, boolean>>({});
+  const [pendingEnvironmentDelete, setPendingEnvironmentDelete] = useState<PendingEnvironmentDelete>();
+  const [deletingEnvironmentId, setDeletingEnvironmentId] = useState<number>();
   const activeEnvironment = useMemo(
     () => environments.find((environment) => environment.id === activeEnvironmentId),
     [activeEnvironmentId, environments],
   );
+  const environmentPagination = usePagination(environments, 6, String(projectId ?? "none"));
 
   const loadEnvironments = useCallback(async (preferredId?: number) => {
     if (!projectId) {
@@ -270,33 +279,27 @@ export function EnvironmentConfigsPage({
     }
   };
 
-  const removeEnvironment = async () => {
-    if (!projectId || !activeEnvironment) return;
-    if (!window.confirm(`确认删除环境 ${activeEnvironment.name}？`)) return;
-
-    try {
-      await deleteEnvironmentConfig(projectId, activeEnvironment.id);
-      onAction(`删除环境 ${activeEnvironment.name}`);
-      onEnvironmentChanged?.();
-      await loadEnvironments();
-    } catch (error) {
-      onAction(error instanceof Error ? error.message : "环境删除失败");
-    }
-  };
-
-  const removeEnvironmentByCard = async (environment: EnvironmentView) => {
-    setActiveEnvironmentId(environment.id);
+  const removeEnvironment = async (environment: EnvironmentView) => {
     if (!projectId) return;
-    if (!window.confirm(`确认删除环境 ${environment.name}？`)) return;
+    setDeletingEnvironmentId(environment.id);
 
     try {
       await deleteEnvironmentConfig(projectId, environment.id);
       onAction(`删除环境 ${environment.name}`);
       onEnvironmentChanged?.();
       await loadEnvironments();
+      setEditorMode(null);
     } catch (error) {
       onAction(error instanceof Error ? error.message : "环境删除失败");
+    } finally {
+      setDeletingEnvironmentId(undefined);
+      setPendingEnvironmentDelete(undefined);
     }
+  };
+
+  const removeEnvironmentByCard = (environment: EnvironmentView) => {
+    setActiveEnvironmentId(environment.id);
+    setPendingEnvironmentDelete({ environment });
   };
 
   const saveVariable = async (event: FormEvent<HTMLFormElement>) => {
@@ -393,7 +396,7 @@ export function EnvironmentConfigsPage({
           )}
 
           <div className="environment-list">
-            {environments.map((environment) => (
+            {environmentPagination.pageItems.map((environment) => (
               <button
                 className={environment.id === activeEnvironment?.id ? "environment-item active" : "environment-item"}
                 key={environment.id}
@@ -409,6 +412,7 @@ export function EnvironmentConfigsPage({
               </button>
             ))}
           </div>
+          <Pagination compact itemLabel="个环境" onPageChange={environmentPagination.setPage} onPageSizeChange={environmentPagination.setPageSize} page={environmentPagination.page} pageSize={environmentPagination.pageSize} total={environments.length} />
         </aside>
 
         <section className="environment-detail-panel">
@@ -419,7 +423,7 @@ export function EnvironmentConfigsPage({
           </div>
 
           <div className="environment-card-grid">
-            {environments.map((environment) => (
+            {environmentPagination.pageItems.map((environment) => (
               <button
                 className={environment.id === activeEnvironment?.id ? "environment-config-card active" : "environment-config-card"}
                 key={environment.id}
@@ -445,7 +449,7 @@ export function EnvironmentConfigsPage({
                         className="icon-btn danger"
                         onClick={(event) => {
                           event.stopPropagation();
-                          void removeEnvironmentByCard(environment);
+                          removeEnvironmentByCard(environment);
                         }}
                         title="删除环境"
                       >
@@ -545,7 +549,7 @@ export function EnvironmentConfigsPage({
             </div>
             <div className="environment-actions">
               {activeEnvironment && (
-                <button className="btn danger" onClick={removeEnvironment} type="button">
+                <button className="btn danger" onClick={() => setPendingEnvironmentDelete({ environment: activeEnvironment })} type="button">
                   <Icon name="delete" />
                   删除环境
                 </button>
@@ -719,7 +723,7 @@ export function EnvironmentConfigsPage({
               </div>
               <div className="environment-actions">
                 {editorMode === "edit" && activeEnvironment && (
-                  <button className="btn danger" onClick={removeEnvironment} type="button">
+                  <button className="btn danger" onClick={() => setPendingEnvironmentDelete({ environment: activeEnvironment })} type="button">
                     <Icon name="delete" />
                     删除环境
                   </button>
@@ -734,6 +738,14 @@ export function EnvironmentConfigsPage({
           </section>
         </div>
       )}
+      {pendingEnvironmentDelete && <ConfirmDialog
+        busy={deletingEnvironmentId === pendingEnvironmentDelete.environment.id}
+        confirmLabel="确认删除"
+        description={`环境“${pendingEnvironmentDelete.environment.name}”及其变量配置将被删除，已绑定用例可能无法继续执行。`}
+        onCancel={() => setPendingEnvironmentDelete(undefined)}
+        onConfirm={() => void removeEnvironment(pendingEnvironmentDelete.environment)}
+        title="删除环境？"
+      />}
     </section>
   );
 }

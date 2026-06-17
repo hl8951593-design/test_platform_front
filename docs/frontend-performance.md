@@ -1,5 +1,8 @@
 # 前端性能优化文档
 
+状态：当前规范
+最后核验：2026-06-15
+
 本文档记录 TestAuto 前端性能相关的约定和当前已完成的优化，后续新增页面、列表、弹窗和接口调用时应同步遵守。
 
 ## 优化目标
@@ -30,7 +33,7 @@
 | `src/pages/ApiPage.tsx` | 测试用例列表加载函数使用稳定回调 |
 | `src/pages/ApiPage.tsx` | 列表请求增加请求序号保护，避免项目切换后旧用例列表覆盖当前项目 |
 | `src/pages/ApiPage.tsx` | 新建、保存、调试必须使用当前项目和环境，去除默认环境兜底 |
-| `src/pages/ApiPage.tsx` | 新增/编辑弹窗不再预置 mock 参数、请求头、请求体、断言和示例响应 |
+| `src/pages/ApiPage.tsx` | 新增/编辑弹窗不再预置 mock 参数、请求头、请求体、断言和响应 |
 | `src/api/apiCases.ts` | `listTestCases` 必须显式传入 `projectId`，避免误查默认项目 |
 
 ## 后续开发规则

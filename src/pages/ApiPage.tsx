@@ -36,6 +36,7 @@ import {
   upsertEnvironmentVariable,
 } from "../api/environmentConfigs";
 import { Icon } from "../components/Icon";
+import { Pagination, usePagination } from "../components/Pagination";
 import type { EnvironmentOption } from "../api/projects";
 import type { ActionHandler } from "../types";
 
@@ -113,6 +114,14 @@ const protocolLabels: Record<CaseProtocol, string> = { http: "HTTP", websocket: 
 
 function normalizeMethod(method: string) {
   return method === "DEL" ? "DELETE" : method;
+}
+
+function caseIdentity(apiCase: Pick<ApiCase, "backendId" | "id" | "protocol">) {
+  return `${apiCase.protocol}:${apiCase.backendId === undefined ? `display:${apiCase.id}` : `backend:${String(apiCase.backendId)}`}`;
+}
+
+function isSameCase(left: Pick<ApiCase, "backendId" | "id" | "protocol">, right: Pick<ApiCase, "backendId" | "id" | "protocol">) {
+  return caseIdentity(left) === caseIdentity(right);
 }
 
 const commonHeaderValues: Record<string, string[]> = {
@@ -394,7 +403,7 @@ function bodyTypeFromBackend(value: unknown): BodyType {
 }
 
 function mapBackendCase(source: BackendTestCase, index: number): ApiCase {
-  const backendId = source.id ?? source.test_case_id ?? source.case_id ?? `API-${index + 1}`;
+  const backendId = source.id ?? source.test_case_id ?? source.case_id;
   const bodyType = bodyTypeFromBackend(source.body_type);
   const body = source.body;
   const singleEnvironmentId = readNumber(source, ["environment_id"]);
@@ -624,6 +633,11 @@ export function ApiPage({
       return titleMatched && methodMatched && statusMatched;
     });
   }, [caseTitleQuery, cases, methodFilters, statusFilter]);
+  const casePagination = usePagination(
+    filteredCases,
+    10,
+    `${projectId ?? "none"}:${caseTitleQuery}:${methodFilters.join(",")}:${statusFilter}`,
+  );
   const hasActiveFilters = Boolean(caseTitleQuery.trim()) || methodFilters.length > 0 || statusFilter !== "all";
   const getCaseEnvironmentNames = (apiCase: ApiCase) => {
     const names = apiCase.environmentIds
@@ -691,7 +705,8 @@ export function ApiPage({
 
   const runCase = useCallback(async (apiCase: ApiCase, event: MouseEvent<HTMLButtonElement>) => {
     event.stopPropagation();
-    if (runningCaseIds.includes(apiCase.id)) return;
+    const identity = caseIdentity(apiCase);
+    if (runningCaseIds.includes(identity)) return;
     if (!apiCase.backendId) {
       onAction(`${apiCase.name} 尚未保存，无法从列表直接运行`);
       return;
@@ -705,10 +720,10 @@ export function ApiPage({
       onAction("请先选择环境");
       return;
     }
-    setRunningCaseIds((current) => [...current, apiCase.id]);
+    setRunningCaseIds((current) => [...current, identity]);
     setRunFeedback(null);
     setCases((current) =>
-      current.map((item) => (item.id === apiCase.id ? { ...item, lastExecutionStatus: "运行中" } : item)),
+      current.map((item) => (isSameCase(item, apiCase) ? { ...item, lastExecutionStatus: "运行中" } : item)),
     );
     try {
       const result =
@@ -720,14 +735,14 @@ export function ApiPage({
       const executionError = readString(result, ["error_message", "message"]);
       setCases((current) =>
         current.map((item) =>
-          item.id === apiCase.id ? { ...item, lastExecutionStatus: nextExecutionStatus, updatedAt: "刚刚" } : item,
+          isSameCase(item, apiCase) ? { ...item, lastExecutionStatus: nextExecutionStatus, updatedAt: "刚刚" } : item,
         ),
       );
       const resultMessage = `${apiCase.name} 运行${nextExecutionStatus === "通过" ? "通过" : nextExecutionStatus}${
         durationMs !== undefined ? `，耗时 ${durationMs}ms` : ""
       }${executionError ? `：${executionError}` : ""}`;
       setRunFeedback({
-        caseId: apiCase.id,
+        caseId: identity,
         caseName: apiCase.name,
         message: resultMessage,
         status: nextExecutionStatus === "通过" ? "success" : "error",
@@ -736,12 +751,12 @@ export function ApiPage({
     } catch (error) {
       const message = error instanceof Error ? error.message : "运行失败，请稍后重试";
       setCases((current) =>
-        current.map((item) => (item.id === apiCase.id ? { ...item, lastExecutionStatus: "失败", updatedAt: "刚刚" } : item)),
+        current.map((item) => (isSameCase(item, apiCase) ? { ...item, lastExecutionStatus: "失败", updatedAt: "刚刚" } : item)),
       );
-      setRunFeedback({ caseId: apiCase.id, caseName: apiCase.name, message: `${apiCase.name} 运行失败：${message}`, status: "error" });
+      setRunFeedback({ caseId: identity, caseName: apiCase.name, message: `${apiCase.name} 运行失败：${message}`, status: "error" });
       onAction(message);
     } finally {
-      setRunningCaseIds((current) => current.filter((id) => id !== apiCase.id));
+      setRunningCaseIds((current) => current.filter((id) => id !== identity));
     }
   }, [environmentId, onAction, projectId, runningCaseIds]);
 
@@ -764,22 +779,23 @@ export function ApiPage({
 
   const requestDeleteCase = useCallback((apiCase: ApiCase, event: MouseEvent<HTMLButtonElement>) => {
     event.stopPropagation();
-    if (!apiCase.backendId || !projectId || deletingCaseIds.includes(apiCase.id)) return;
+    if (!apiCase.backendId || !projectId || deletingCaseIds.includes(caseIdentity(apiCase))) return;
     setDeleteCandidate(apiCase);
   }, [deletingCaseIds, projectId]);
 
   const deleteCase = useCallback(async (apiCase: ApiCase) => {
-    if (!apiCase.backendId || !projectId || deletingCaseIds.includes(apiCase.id)) return;
-    setDeletingCaseIds((current) => [...current, apiCase.id]);
+    const identity = caseIdentity(apiCase);
+    if (!apiCase.backendId || !projectId || deletingCaseIds.includes(identity)) return;
+    setDeletingCaseIds((current) => [...current, identity]);
     try {
       if (apiCase.protocol === "websocket") {
         await deleteWebSocketTestCase(projectId, apiCase.backendId);
       } else {
         await deleteTestCase(projectId, apiCase.backendId);
       }
-      setCases((current) => current.filter((item) => item.id !== apiCase.id));
+      setCases((current) => current.filter((item) => !isSameCase(item, apiCase)));
       setRunFeedback({
-        caseId: apiCase.id,
+        caseId: identity,
         caseName: apiCase.name,
         message: `${apiCase.name} 已删除`,
         status: "success",
@@ -788,13 +804,13 @@ export function ApiPage({
     } catch (error) {
       const message = error instanceof Error ? error.message : "删除失败，请稍后重试";
       setRunFeedback({
-        caseId: apiCase.id,
+        caseId: identity,
         caseName: apiCase.name,
         message: `${apiCase.name} 删除失败：${message}`,
         status: "error",
       });
     } finally {
-      setDeletingCaseIds((current) => current.filter((id) => id !== apiCase.id));
+      setDeletingCaseIds((current) => current.filter((id) => id !== identity));
     }
   }, [deletingCaseIds, projectId]);
 
@@ -820,7 +836,10 @@ export function ApiPage({
       const mappedCase = savedCase ? mapBackendCase(savedCase, cases.length) : nextCase;
       setCases((current) => {
         const mergedCase = {
+          ...nextCase,
           ...mappedCase,
+          id: mode === "edit" ? nextCase.id : mappedCase.id,
+          backendId: mappedCase.backendId ?? nextCase.backendId,
           environmentId: nextCase.environmentId,
           environmentIds: nextCase.environmentIds,
           group: nextCase.group,
@@ -835,7 +854,7 @@ export function ApiPage({
           extractors: nextCase.extractors,
         };
         if (mode === "create") return [mergedCase, ...current];
-        return current.map((item) => (item.id === nextCase.id ? { ...nextCase, ...mergedCase } : item));
+        return current.map((item) => (isSameCase(item, nextCase) ? mergedCase : item));
       });
       onAction(`${mode === "create" ? "新建" : "保存"} ${nextCase.name}`);
       setEditorState(null);
@@ -969,7 +988,7 @@ export function ApiPage({
         <div className="page-toolbar">
           <div>
             <h2>接口测试用例列表</h2>
-            <p>维护接口定义、请求数据、断言和示例响应，作为自动化测试流程的数据源。</p>
+            <p>维护接口定义、请求数据、断言和响应，作为自动化测试流程的数据源。</p>
           </div>
           <div className="toolbar-actions">
             <button
@@ -1111,7 +1130,7 @@ export function ApiPage({
                     <p>
                       {environments.length === 0
                         ? "当前项目还没有环境，请先在环境配置中创建环境后再新增测试用例。"
-                        : "新建用例后，可维护请求方法、Params、Headers、Body、断言和示例响应。"}
+                        : "新建用例后，可维护请求方法、Params、Headers、Body、断言和响应。"}
                     </p>
                     <button
                       className="btn primary"
@@ -1156,8 +1175,8 @@ export function ApiPage({
                 </td>
               </tr>
             )}
-            {filteredCases.map((item) => (
-              <tr className={runningCaseIds.includes(item.id) ? "case-running-row" : ""} key={item.id} onClick={() => setEditorState({ mode: "edit", apiCase: item })}>
+            {casePagination.pageItems.map((item) => (
+              <tr className={runningCaseIds.includes(caseIdentity(item)) ? "case-running-row" : ""} key={caseIdentity(item)} onClick={() => setEditorState({ mode: "edit", apiCase: item })}>
                 <td>
                   <strong>{item.name}</strong>
                   <small>{item.id}</small>
@@ -1180,13 +1199,13 @@ export function ApiPage({
                 <td>
                   <div className="case-row-actions">
                     <button
-                      className={runningCaseIds.includes(item.id) ? "btn run-btn running" : "btn run-btn"}
-                      disabled={runningCaseIds.includes(item.id)}
+                      className={runningCaseIds.includes(caseIdentity(item)) ? "btn run-btn running" : "btn run-btn"}
+                      disabled={runningCaseIds.includes(caseIdentity(item))}
                       onClick={(event) => runCase(item, event)}
                       type="button"
                     >
-                      <Icon name={runningCaseIds.includes(item.id) ? "progress_activity" : "play_arrow"} />
-                      {runningCaseIds.includes(item.id) ? "运行中..." : "运行"}
+                      <Icon name={runningCaseIds.includes(caseIdentity(item)) ? "progress_activity" : "play_arrow"} />
+                      {runningCaseIds.includes(caseIdentity(item)) ? "运行中..." : "运行"}
                     </button>
                     {item.protocol === "http" && (
                       <button className="btn ai-expand-btn" onClick={(event) => openAiExpandModal(item, event)} type="button">
@@ -1196,7 +1215,7 @@ export function ApiPage({
                     )}
                     <button
                       className="btn delete-case-btn"
-                      disabled={deletingCaseIds.includes(item.id) || runningCaseIds.includes(item.id)}
+                      disabled={deletingCaseIds.includes(caseIdentity(item)) || runningCaseIds.includes(caseIdentity(item))}
                       onClick={(event) => requestDeleteCase(item, event)}
                       type="button"
                     >
@@ -1209,6 +1228,16 @@ export function ApiPage({
             ))}
           </tbody>
         </table>
+        {!isLoading && !listError && (
+          <Pagination
+            itemLabel="条用例"
+            onPageChange={casePagination.setPage}
+            onPageSizeChange={casePagination.setPageSize}
+            page={casePagination.page}
+            pageSize={casePagination.pageSize}
+            total={filteredCases.length}
+          />
+        )}
       </div>
 
       {aiGenerateModalOpen && (
@@ -2716,7 +2745,7 @@ function ApiCaseEditorModal({
           {apiCase.protocol === "http" && <button className={activeTab === "body" ? "active" : ""} onClick={() => setActiveTab("body")} type="button">Body</button>}
           {apiCase.protocol === "websocket" && <button className={activeTab === "message" ? "active" : ""} onClick={() => setActiveTab("message")} type="button">连接与消息</button>}
           <button className={activeTab === "assertions" ? "active" : ""} onClick={() => setActiveTab("assertions")} type="button">断言</button>
-          <button className={activeTab === "response" ? "active" : ""} onClick={() => setActiveTab("response")} type="button">示例响应</button>
+          <button className={activeTab === "response" ? "active" : ""} onClick={() => setActiveTab("response")} type="button">响应</button>
         </div>
 
         <div className="tab-panel">
@@ -2931,9 +2960,9 @@ function ApiCaseEditorModal({
             <div className="single-editor">
               {debugResult && <DebugResponsePanel result={debugResult} />}
               <label>
-                <span>示例响应</span>
+                <span>响应</span>
                 <small>调试完成后会自动填入本次响应体，也可以手动调整后保存。</small>
-                <textarea onChange={(event) => setExampleResponse(event.target.value)} placeholder="可粘贴接口示例响应，留空也可以保存。" value={exampleResponse} />
+                <textarea onChange={(event) => setExampleResponse(event.target.value)} placeholder="可粘贴接口响应，留空也可以保存。" value={exampleResponse} />
               </label>
             </div>
           )}

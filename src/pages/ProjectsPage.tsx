@@ -2,6 +2,7 @@ import { useState } from "react";
 import { createProject, type ProjectOption } from "../api/projects";
 import { IconButton } from "../components/Buttons";
 import { Icon } from "../components/Icon";
+import { Pagination, usePagination } from "../components/Pagination";
 import type { ActionHandler } from "../types";
 
 export function ProjectsPage({
@@ -18,6 +19,10 @@ export function ProjectsPage({
   projects: ProjectOption[];
 }) {
   const [createOpen, setCreateOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const filteredProjects = projects.filter((project) => !search.trim()
+    || `${project.name} ${project.description} ${project.owner}`.toLowerCase().includes(search.trim().toLowerCase()));
+  const pagination = usePagination(filteredProjects, 10, search);
 
   return (
     <section className="page page-projects">
@@ -25,7 +30,7 @@ export function ProjectsPage({
         <button className="seg active" onClick={() => onAction("全部项目")} type="button">全部</button>
         <button className="seg" onClick={() => onAction("高风险项目")} type="button">高风险</button>
         <button className="seg" onClick={() => onAction("最近活跃")} type="button">最近活跃</button>
-        <label className="inline-field"><Icon name="search" /><input placeholder="搜索项目名称或团队" /></label>
+        <label className="inline-field"><Icon name="search" /><input onChange={(event) => setSearch(event.target.value)} placeholder="搜索项目名称或团队" value={search} /></label>
         <button className="btn primary" onClick={() => setCreateOpen(true)} type="button">
           <Icon name="add" />
           创建项目
@@ -88,7 +93,10 @@ export function ProjectsPage({
                   </td>
                 </tr>
               )}
-              {projects.map((project) => (
+              {filteredProjects.length === 0 && projects.length > 0 && !isLoading && !loadError && (
+                <tr className="table-state-row"><td colSpan={8}><div className="list-state empty"><span className="list-state-icon"><Icon name="manage_search" /></span><h4>未找到匹配项目</h4><p>请调整项目名称、说明或负责人关键字。</p></div></td></tr>
+              )}
+              {pagination.pageItems.map((project) => (
                 <tr key={project.id}>
                   <td><strong>{project.name}</strong><small>{project.description}</small></td>
                   <td>{project.owner}</td>
@@ -102,6 +110,9 @@ export function ProjectsPage({
               ))}
             </tbody>
           </table>
+          {!isLoading && !loadError && (
+            <Pagination itemLabel="个项目" onPageChange={pagination.setPage} onPageSizeChange={pagination.setPageSize} page={pagination.page} pageSize={pagination.pageSize} total={filteredProjects.length} />
+          )}
         </article>
         <aside className="panel health-panel">
           <div className="panel-title">

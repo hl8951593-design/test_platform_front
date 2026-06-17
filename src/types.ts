@@ -6,6 +6,7 @@ export type RouteKey =
   | "scenarios"
   | "api"
   | "executions"
+  | "defects"
   | "reports"
   | "login"
   | "profile"

@@ -1,0 +1,155 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e5]:
+      - button "AI TestAuto" [ref=e6] [cursor=pointer]:
+        - generic [ref=e7]: AI
+        - generic [ref=e8]: TestAuto
+      - button "收起菜单" [ref=e9] [cursor=pointer]:
+        - generic [ref=e10]: keyboard_double_arrow_left
+    - generic [ref=e11]:
+      - button "工作台" [ref=e12] [cursor=pointer]:
+        - generic [ref=e13]: dashboard
+        - generic [ref=e14]: 工作台
+      - button "项目管理" [ref=e15] [cursor=pointer]:
+        - generic [ref=e16]: folder_special
+        - generic [ref=e17]: 项目管理
+      - button "测试计划" [ref=e18] [cursor=pointer]:
+        - generic [ref=e19]: event_note
+        - generic [ref=e20]: 测试计划
+      - button "可视化编排" [ref=e21] [cursor=pointer]:
+        - generic [ref=e22]: visibility
+        - generic [ref=e23]: 可视化编排
+      - button "场景组合" [ref=e24] [cursor=pointer]:
+        - generic [ref=e25]: account_tree
+        - generic [ref=e26]: 场景组合
+      - button "接口测试用例" [ref=e27] [cursor=pointer]:
+        - generic [ref=e28]: api
+        - generic [ref=e29]: 接口测试用例
+      - button "执行中心" [ref=e30] [cursor=pointer]:
+        - generic [ref=e31]: play_circle
+        - generic [ref=e32]: 执行中心
+      - button "缺陷跟踪" [ref=e33] [cursor=pointer]:
+        - generic [ref=e34]: bug_report
+        - generic [ref=e35]: 缺陷跟踪
+      - button "测试报告" [ref=e36] [cursor=pointer]:
+        - generic [ref=e37]: description
+        - generic [ref=e38]: 测试报告
+    - generic [ref=e39]:
+      - button "环境配置" [ref=e40] [cursor=pointer]:
+        - generic [ref=e41]: settings_input_component
+        - generic [ref=e42]: 环境配置
+      - button "退出登录" [ref=e43] [cursor=pointer]:
+        - generic [ref=e44]: logout
+        - generic [ref=e45]: 退出登录
+  - main [ref=e46]:
+    - generic [ref=e47]:
+      - heading "缺陷跟踪" [level=1] [ref=e50]
+      - generic [ref=e51]:
+        - generic [ref=e52]:
+          - button "项目：加载项目中..." [disabled] [ref=e54]:
+            - generic [ref=e56]: folder_special
+            - generic:
+              - generic: 项目
+              - strong: 加载项目中...
+            - generic [ref=e57]: expand_more
+          - button "环境：请先选择项目" [disabled] [ref=e60]:
+            - generic [ref=e62]: cloud
+            - generic [ref=e63]:
+              - generic [ref=e64]: 环境
+              - strong [ref=e65]: 请先选择项目
+            - generic [ref=e66]: expand_more
+        - generic [ref=e67]:
+          - generic [ref=e68]: search
+          - textbox [ref=e69]:
+            - /placeholder: 搜索用例、接口、报告
+        - button "新建任务" [ref=e70] [cursor=pointer]:
+          - generic [ref=e71]: add
+          - text: 新建任务
+        - button "通知" [ref=e72] [cursor=pointer]:
+          - generic [ref=e73]: notifications
+        - button "进入个人中心" [ref=e74] [cursor=pointer]:
+          - generic [ref=e75]: 当前
+    - generic [ref=e76]:
+      - generic [ref=e77]:
+        - generic "缺陷流程" [ref=e78]:
+          - button "新创建" [ref=e79] [cursor=pointer]:
+            - generic [ref=e80]: fiber_new
+            - text: 新创建
+          - button "已激活" [ref=e81] [cursor=pointer]:
+            - generic [ref=e82]: bolt
+            - text: 已激活
+          - button "已确认" [ref=e83] [cursor=pointer]:
+            - generic [ref=e84]: task_alt
+            - text: 已确认
+          - button "已修复" [ref=e85] [cursor=pointer]:
+            - generic [ref=e86]: build_circle
+            - text: 已修复
+          - button "已验证" [ref=e87] [cursor=pointer]:
+            - generic [ref=e88]: verified
+            - text: 已验证
+          - button "已关闭" [ref=e89] [cursor=pointer]:
+            - generic [ref=e90]: lock
+            - text: 已关闭
+          - button "重新激活" [ref=e91] [cursor=pointer]:
+            - generic [ref=e92]: restart_alt
+            - text: 重新激活
+        - button "新建缺陷" [disabled] [ref=e93]:
+          - generic [ref=e94]: add
+          - text: 新建缺陷
+      - generic [ref=e95]:
+        - generic [ref=e96]: info
+        - generic [ref=e97]:
+          - strong [ref=e98]: 请先选择项目
+          - paragraph [ref=e99]: 缺陷按项目隔离，选择项目后可记录和推进 Bug。
+      - generic [ref=e100]:
+        - article [ref=e101]:
+          - generic [ref=e102]: bug_report
+          - generic [ref=e103]:
+            - paragraph [ref=e104]: 缺陷总数
+            - strong [ref=e105]: "0"
+        - article [ref=e106]:
+          - generic [ref=e107]: pending_actions
+          - generic [ref=e108]:
+            - paragraph [ref=e109]: 待处理
+            - strong [ref=e110]: "0"
+        - article [ref=e111]:
+          - generic [ref=e112]: build_circle
+          - generic [ref=e113]:
+            - paragraph [ref=e114]: 已修复
+            - strong [ref=e115]: "0"
+        - article [ref=e116]:
+          - generic [ref=e117]: priority_high
+          - generic [ref=e118]:
+            - paragraph [ref=e119]: 紧急
+            - strong [ref=e120]: "0"
+      - generic [ref=e121]:
+        - generic [ref=e122]:
+          - generic [ref=e123]: search
+          - textbox [ref=e124]:
+            - /placeholder: 搜索标题、指派人、报告人或内容
+        - combobox "缺陷状态" [ref=e125]:
+          - option "全部状态" [selected]
+          - option "新创建"
+          - option "已激活"
+          - option "已确认"
+          - option "已修复"
+          - option "已验证"
+          - option "已关闭"
+          - option "重新激活"
+        - combobox "紧急程度" [ref=e126]:
+          - option "全部紧急程度" [selected]
+          - option "低"
+          - option "中"
+          - option "高"
+          - option "紧急"
+        - generic [ref=e127]: 0 / 0 个缺陷
+      - article [ref=e128]:
+        - generic [ref=e129]:
+          - generic [ref=e130]:
+            - heading "缺陷列表" [level=3] [ref=e131]
+            - paragraph [ref=e132]: 缺陷状态必须通过流程按钮流转，列表展示当前项目内记录。
+          - button "刷新" [ref=e133] [cursor=pointer]
+        - generic [ref=e134]:
+          - generic [ref=e136]: bug_report
+          - heading "暂无缺陷记录" [level=4] [ref=e137]
+          - paragraph [ref=e138]: 创建缺陷后，可在这里推进 Bug 跟踪流程。

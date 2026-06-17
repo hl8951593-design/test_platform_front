@@ -9,6 +9,7 @@ import { ApiPage } from "./pages/ApiPage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { EnvironmentConfigsPage } from "./pages/EnvironmentConfigsPage";
 import { ExecutionsPage } from "./pages/ExecutionsPage";
+import { DefectsPage } from "./pages/DefectsPage";
 import { FlowPage } from "./pages/FlowPage";
 import { LoginPage } from "./pages/LoginPage";
 import { PlansPage } from "./pages/PlansPage";
@@ -111,6 +112,8 @@ function routeContent({
       );
     case "executions":
       return <ExecutionsPage onAction={onAction} />;
+    case "defects":
+      return <DefectsPage onAction={onAction} projectId={activeProjectId} />;
     case "reports":
       return <ReportsPage onAction={onAction} />;
     case "environments":

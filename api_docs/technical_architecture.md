@@ -1,5 +1,8 @@
 # 自动化测试平台后端技术架构文档
 
+状态：后端参考设计，未在当前前端仓库内完成逐项代码核验。具体接口以
+[API 文档索引](README.md) 中的 `api_*.md` 为准。
+
 开发过程中的模块关系、业务逻辑、数据权限和用户权限记录见 [开发过程技术文档](development_technical_notes.md)。
 
 项目权限底座接口见 [项目权限接口文档](api_project_permissions.md)。

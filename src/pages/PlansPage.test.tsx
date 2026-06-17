@@ -118,7 +118,7 @@ describe("PlansPage", () => {
     render(<PlansPage environmentId={1} environments={environments} onAction={onAction} projectId={7} />);
 
     fireEvent.click(screen.getAllByRole("button", { name: /新建计划/ })[0]);
-    fireEvent.change(screen.getByLabelText("计划名称 *"), { target: { value: "核心回归" } });
+    fireEvent.change(screen.getByPlaceholderText("例如：核心链路夜间回归"), { target: { value: "核心回归" } });
     fireEvent.click(await screen.findByRole("button", { name: /登录消息场景/ }));
     fireEvent.click(screen.getByRole("button", { name: "创建计划" }));
 
@@ -199,5 +199,45 @@ describe("PlansPage", () => {
     expect(await screen.findByText("未来 14 天调度")).toBeInTheDocument();
     expect(screen.getAllByText("夜间回归").length).toBeGreaterThan(0);
     expect(api.listPlanSchedule).toHaveBeenCalledWith(3);
+  });
+
+  it("uses the app confirmation dialog before deleting a plan", async () => {
+    const plan = {
+      id: "PLAN-DELETE",
+      projectId: 7,
+      version: 1,
+      name: "待删除计划",
+      description: "",
+      enabled: true,
+      triggerType: "manual",
+      cronExpression: "",
+      scheduleTimezone: "Asia/Shanghai",
+      webhookEvent: "",
+      environmentIds: [1],
+      targets: [],
+      executionMode: "serial",
+      failurePolicy: "stop",
+      retryCount: 0,
+      timeoutMinutes: 30,
+      notificationEmails: [],
+      tags: [],
+      createdAt: "",
+      updatedAt: "",
+    };
+    api.plansByProject.set(7, [plan]);
+    render(<PlansPage environments={environments} onAction={vi.fn()} projectId={7} />);
+
+    const card = (await screen.findByText(plan.name)).closest(".plan-card") as HTMLElement;
+    fireEvent.click(within(card).getByRole("button", { name: "删除" }));
+    const dialog = screen.getByRole("alertdialog", { name: "删除测试计划？" });
+    expect(api.deletePlan).not.toHaveBeenCalled();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(api.deletePlan).not.toHaveBeenCalled();
+
+    fireEvent.click(within(card).getByRole("button", { name: "删除" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认删除" }));
+    await waitFor(() => expect(api.deletePlan).toHaveBeenCalledWith(7, plan.id));
   });
 });

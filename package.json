@@ -4,9 +4,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite --host 0.0.0.0 --port 5173",
+    "dev": "vite --host 0.0.0.0 --port 5174",
     "build": "tsc -b && vite build",
-    "preview": "vite preview --host 0.0.0.0 --port 5173",
+    "docs:check": "node scripts/check-docs.mjs",
+    "preview": "vite preview --host 0.0.0.0 --port 5174",
     "test": "vitest run"
   },
   "dependencies": {

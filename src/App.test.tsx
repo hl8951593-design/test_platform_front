@@ -268,6 +268,47 @@ describe("App routing shell", () => {
     expect(screen.getByText("查询用户详情")).toBeInTheDocument();
   });
 
+  it("paginates API test cases and keeps the total count visible", async () => {
+    const testCases = Array.from({ length: 12 }, (_, index) => ({
+      id: index + 1,
+      case_no: `API-${String(index + 1).padStart(3, "0")}`,
+      name: `分页用例 ${index + 1}`,
+      method: "GET",
+      path: `/items/${index + 1}`,
+      status: "enabled",
+      environment_ids: [1],
+    }));
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => ({
+      ok: true,
+      json: async () => ({
+        code: 0,
+        message: "ok",
+        data: String(input).includes("/websocket-test-cases") ? [] : testCases,
+      }),
+    }) as Response);
+
+    render(
+      <ApiPage
+        environmentError=""
+        environmentId={1}
+        environmentLoading={false}
+        environments={[{ id: 1, name: "test", baseUrl: "https://api.test", description: "", isDefault: true }]}
+        onAction={vi.fn()}
+        projectId={1}
+      />,
+    );
+
+    expect(await screen.findByText("分页用例 1")).toBeInTheDocument();
+    expect(screen.getByText("分页用例 10")).toBeInTheDocument();
+    expect(screen.queryByText("分页用例 11")).not.toBeInTheDocument();
+    expect(screen.getByText("显示 1-10，共 12 条用例")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "下一页" }));
+    expect(screen.getByText("分页用例 11")).toBeInTheDocument();
+    expect(screen.getByText("分页用例 12")).toBeInTheDocument();
+    expect(screen.queryByText("分页用例 1")).not.toBeInTheDocument();
+  });
+
   it("creates an environment variable from the API test case page", async () => {
     const fetchMock = vi
       .spyOn(globalThis, "fetch")
@@ -454,6 +495,8 @@ describe("App routing shell", () => {
     );
 
     fireEvent.click(await screen.findByText("登录用户"));
+    expect(screen.getByRole("button", { name: "响应" })).toBeInTheDocument();
+    expect(screen.queryByText(["示例", "响应"].join(""))).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /调试/ }));
 
     expect(await screen.findByText("执行响应")).toBeInTheDocument();
@@ -540,6 +583,73 @@ describe("App routing shell", () => {
         }),
       ),
     );
+  });
+
+  it("updates only the edited test case when display codes are duplicated", async () => {
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          code: 0,
+          message: "ok",
+          data: [
+            {
+              id: 11,
+              case_no: "API-006",
+              name: "商标信息接口",
+              method: "GET",
+              path: "/trademarks",
+              environment_id: 1,
+            },
+            {
+              id: 12,
+              case_no: "API-006",
+              name: "专利信息接口",
+              method: "GET",
+              path: "/patents",
+              environment_id: 1,
+            },
+          ],
+        }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ code: 0, message: "ok", data: [] }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          code: 0,
+          message: "ok",
+          data: {
+            name: "商标查询接口",
+            method: "GET",
+            path: "/trademarks",
+            environment_id: 1,
+          },
+        }),
+      } as Response);
+
+    render(
+      <ApiPage
+        environmentError=""
+        environmentId={1}
+        environmentLoading={false}
+        environments={[{ id: 1, name: "test", baseUrl: "https://api.test", description: "", isDefault: true }]}
+        onAction={vi.fn()}
+        projectId={1}
+      />,
+    );
+
+    fireEvent.click(await screen.findByText("商标信息接口"));
+    fireEvent.change(screen.getByDisplayValue("商标信息接口"), { target: { value: "商标查询接口" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(screen.getAllByText("商标查询接口")).toHaveLength(1);
+    expect(screen.getAllByText("专利信息接口")).toHaveLength(1);
+    expect(screen.queryByText("商标信息接口")).not.toBeInTheDocument();
+    expect(screen.getByText("共 2 条用例")).toBeInTheDocument();
   });
 
   it("formats the JSON request body from the editor toolbar", async () => {

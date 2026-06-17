@@ -1,9 +1,11 @@
 import { ActionButton } from "../components/Buttons";
 import { Icon } from "../components/Icon";
+import { Pagination, usePagination } from "../components/Pagination";
 import { executionRows } from "../data/mock";
 import type { ActionHandler } from "../types";
 
 export function ExecutionsPage({ onAction }: { onAction: ActionHandler }) {
+  const pagination = usePagination(executionRows, 10, "queue");
   return (
     <section className="page page-executions">
       <div className="execution-command">
@@ -26,11 +28,12 @@ export function ExecutionsPage({ onAction }: { onAction: ActionHandler }) {
           <table className="data-table">
             <thead><tr><th>ID</th><th>状态</th><th>用例</th><th>标识</th></tr></thead>
             <tbody>
-              {executionRows.map((row) => (
+              {pagination.pageItems.map((row) => (
                 <tr key={row[0]}>{row.map((item, index) => <td key={item}>{index === 1 ? <span className={`status status-${item}`}>{item}</span> : item}</td>)}</tr>
               ))}
             </tbody>
           </table>
+          <Pagination itemLabel="条任务" onPageChange={pagination.setPage} onPageSizeChange={pagination.setPageSize} page={pagination.page} pageSize={pagination.pageSize} total={executionRows.length} />
         </main>
         <aside className="log-panel">
           <h3>Streaming Logs</h3>

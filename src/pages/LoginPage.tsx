@@ -211,7 +211,7 @@ function TextField({
     <label className={error ? "field invalid" : "field"}>
       <span>
         {label}
-        {required ? <em>*</em> : <small>选填</small>}
+        {required ? <em className="required-mark">*</em> : <small>选填</small>}
       </span>
       <input aria-invalid={Boolean(error)} name={name} placeholder={placeholder} type={type} />
       {error && <b>{error}</b>}

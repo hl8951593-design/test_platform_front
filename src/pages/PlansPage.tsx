@@ -22,12 +22,15 @@ import {
 } from "../api/plans";
 import type { EnvironmentOption } from "../api/projects";
 import { listScenarios, type TestScenario } from "../api/scenarios";
+import { ConfirmDialog } from "../components/ConfirmDialog";
 import { Icon } from "../components/Icon";
+import { Pagination, usePagination } from "../components/Pagination";
 import type { ActionHandler } from "../types";
 
 type PlansTab = "list" | "calendar" | "history";
 type PlanStatusFilter = "all" | "enabled" | "disabled";
 type PlanEditorMode = "create" | "edit";
+type PendingPlanDelete = { type: "plan"; plan: TestPlan } | { type: "history" };
 type PlanForm = {
   id: string;
   version: number;
@@ -153,6 +156,8 @@ export function PlansPage({
   const [assetSearch, setAssetSearch] = useState("");
   const [runDialogPlan, setRunDialogPlan] = useState<TestPlan>();
   const [runEnvironmentId, setRunEnvironmentId] = useState<number | undefined>(environmentId);
+  const [pendingDelete, setPendingDelete] = useState<PendingPlanDelete>();
+  const [deleteBusy, setDeleteBusy] = useState(false);
   const importRef = useRef<HTMLInputElement>(null);
   const projectEnvironments = environments ?? [];
 
@@ -219,6 +224,11 @@ export function PlansPage({
       return !query || `${plan.name} ${plan.description} ${plan.tags.join(" ")}`.toLowerCase().includes(query);
     });
   }, [plans, search, statusFilter, triggerFilter]);
+  const planPagination = usePagination(
+    filteredPlans,
+    10,
+    `${projectId ?? "none"}:${search}:${statusFilter}:${triggerFilter}`,
+  );
 
   const filteredAssets = useMemo(() => {
     const query = assetSearch.trim().toLowerCase();
@@ -299,13 +309,32 @@ export function PlansPage({
   };
 
   const removePlan = async (plan: TestPlan) => {
-    if (!projectId || !window.confirm(`确定删除测试计划“${plan.name}”吗？`)) return;
+    if (!projectId) return;
+    setDeleteBusy(true);
     try {
       await deletePlan(projectId, plan.id);
       await reloadData();
       onAction(`删除计划 ${plan.name}`);
     } catch (error) {
       onAction(error instanceof Error ? error.message : "计划删除失败");
+    } finally {
+      setDeleteBusy(false);
+      setPendingDelete(undefined);
+    }
+  };
+
+  const clearRunHistory = async () => {
+    if (!projectId || runs.length === 0) return;
+    setDeleteBusy(true);
+    try {
+      await clearPlanRuns(projectId);
+      await reloadData();
+      onAction("已清空计划执行历史");
+    } catch (error) {
+      onAction(error instanceof Error ? error.message : "执行历史清理失败");
+    } finally {
+      setDeleteBusy(false);
+      setPendingDelete(undefined);
     }
   };
 
@@ -398,12 +427,12 @@ export function PlansPage({
               <PlanEmpty hasProject={Boolean(projectId)} hasPlans={plans.length > 0} onCreate={startCreate} />
             ) : (
               <div className="plan-list">
-                {filteredPlans.map((plan) => (
+                {planPagination.pageItems.map((plan) => (
                   <PlanCard
                     environments={projectEnvironments}
                     key={plan.id}
                     onCopy={() => copyPlan(plan)}
-                    onDelete={() => removePlan(plan)}
+                    onDelete={() => setPendingDelete({ type: "plan", plan })}
                     onEdit={() => startEdit(plan)}
                     onRun={() => {
                       setRunEnvironmentId(environmentId ?? plan.environmentIds[0]);
@@ -413,6 +442,14 @@ export function PlansPage({
                     plan={plan}
                   />
                 ))}
+                <Pagination
+                  itemLabel="个计划"
+                  onPageChange={planPagination.setPage}
+                  onPageSizeChange={planPagination.setPageSize}
+                  page={planPagination.page}
+                  pageSize={planPagination.pageSize}
+                  total={filteredPlans.length}
+                />
               </div>
             )}
           </article>
@@ -423,8 +460,7 @@ export function PlansPage({
       {activeTab === "history" && (
         <RunHistory
           onClear={() => {
-            if (!projectId || runs.length === 0 || !window.confirm("确定清空当前项目的计划执行历史吗？")) return;
-            void clearPlanRuns(projectId).then(reloadData).then(() => onAction("已清空计划执行历史")).catch((error) => onAction(error instanceof Error ? error.message : "执行历史清理失败"));
+            if (projectId && runs.length > 0) setPendingDelete({ type: "history" });
           }}
           onDelete={(run) => {
             if (!projectId) return;
@@ -467,6 +503,16 @@ export function PlansPage({
           </section>
         </div>
       )}
+      {pendingDelete && <ConfirmDialog
+        busy={deleteBusy}
+        confirmLabel={pendingDelete.type === "plan" ? "确认删除" : "确认清空"}
+        description={pendingDelete.type === "plan"
+          ? `测试计划“${pendingDelete.plan.name}”将被删除，已有执行历史不会随计划一起删除。`
+          : "当前项目下的全部计划执行历史将被清空，此操作无法恢复。"}
+        onCancel={() => setPendingDelete(undefined)}
+        onConfirm={() => void (pendingDelete.type === "plan" ? removePlan(pendingDelete.plan) : clearRunHistory())}
+        title={pendingDelete.type === "plan" ? "删除测试计划？" : "清空执行历史？"}
+      />}
     </section>
   );
 }
@@ -566,12 +612,12 @@ function PlanEditor({
         <div className="plan-editor-grid">
           <section className="plan-editor-main">
             <div className="plan-form-section"><h4>基础信息</h4><div className="plan-form-grid">
-              <label className="plan-field"><span>计划名称 *</span><input onChange={(event) => patch("name", event.target.value)} placeholder="例如：核心链路夜间回归" value={form.name} /></label>
+              <label className="plan-field"><span>计划名称 <span aria-hidden="true" className="required-mark">*</span></span><input onChange={(event) => patch("name", event.target.value)} placeholder="例如：核心链路夜间回归" value={form.name} /></label>
               <label className="plan-field"><span>标签</span><input onChange={(event) => patch("tagText", event.target.value)} placeholder="回归, P0, 夜间任务" value={form.tagText} /></label>
               <label className="plan-field full"><span>计划说明</span><textarea onChange={(event) => patch("description", event.target.value)} placeholder="说明计划目标与执行范围" value={form.description} /></label>
             </div></div>
-            <div className="plan-form-section"><div className="plan-section-head"><h4>执行环境 *</h4><span className="plan-section-count">{form.environmentIds.length} 已选</span></div><div className="plan-choice-grid">{environments.map((environment) => { const selected = form.environmentIds.includes(environment.id); return <button className={selected ? "plan-choice selected" : "plan-choice"} key={environment.id} onClick={() => toggleEnvironment(environment.id)} type="button"><Icon name="cloud" /><span><strong>{environment.name}</strong><small>{environment.baseUrl || "未配置 Base URL"}</small></span><span className={selected ? "plan-choice-check visible" : "plan-choice-check"}><Icon name="check_circle" /></span></button> })}{environments.length === 0 && <p className="plan-empty-copy">当前项目暂无环境，请先创建环境配置。</p>}</div></div>
-            <div className="plan-form-section"><div className="plan-section-head"><div><h4>执行目标 *</h4><small className="plan-section-hint">点击场景加入执行队列</small></div><div className="plan-section-tools"><span className="plan-section-count">{form.targets.length} 已选</span><label className="inline-field"><Icon name="search" /><input onChange={(event) => onAssetSearch(event.target.value)} placeholder="搜索测试场景" value={assetSearch} /></label></div></div>{assetError && <p className="form-message">{assetError}</p>}<div className="plan-assets">{assetsLoading ? <p className="plan-empty-copy">正在加载测试场景...</p> : assets.map((asset) => <button className={form.targets.some((item) => item.id === asset.id) ? "plan-asset selected" : "plan-asset"} key={asset.id} onClick={() => toggleTarget(asset)} type="button"><b>{asset.method}</b><span><strong>{asset.name}</strong><small>场景 v{asset.scenarioVersion ?? "-"} · {asset.path || "无说明"}</small></span><Icon name={form.targets.some((item) => item.id === asset.id) ? "check_circle" : "add_circle"} /></button>)}{!assetsLoading && assets.length === 0 && <p className="plan-empty-copy">暂无可绑定的测试场景。</p>}</div></div>
+            <div className="plan-form-section"><div className="plan-section-head"><h4>执行环境 <span aria-hidden="true" className="required-mark">*</span></h4><span className="plan-section-count">{form.environmentIds.length} 已选</span></div><div className="plan-choice-grid">{environments.map((environment) => { const selected = form.environmentIds.includes(environment.id); return <button className={selected ? "plan-choice selected" : "plan-choice"} key={environment.id} onClick={() => toggleEnvironment(environment.id)} type="button"><Icon name="cloud" /><span><strong>{environment.name}</strong><small>{environment.baseUrl || "未配置 Base URL"}</small></span><span className={selected ? "plan-choice-check visible" : "plan-choice-check"}><Icon name="check_circle" /></span></button> })}{environments.length === 0 && <p className="plan-empty-copy">当前项目暂无环境，请先创建环境配置。</p>}</div></div>
+            <div className="plan-form-section"><div className="plan-section-head"><div><h4>执行目标 <span aria-hidden="true" className="required-mark">*</span></h4><small className="plan-section-hint">点击场景加入执行队列</small></div><div className="plan-section-tools"><span className="plan-section-count">{form.targets.length} 已选</span><label className="inline-field"><Icon name="search" /><input onChange={(event) => onAssetSearch(event.target.value)} placeholder="搜索测试场景" value={assetSearch} /></label></div></div>{assetError && <p className="form-message">{assetError}</p>}<div className="plan-assets">{assetsLoading ? <p className="plan-empty-copy">正在加载测试场景...</p> : assets.map((asset) => <button className={form.targets.some((item) => item.id === asset.id) ? "plan-asset selected" : "plan-asset"} key={asset.id} onClick={() => toggleTarget(asset)} type="button"><b>{asset.method}</b><span><strong>{asset.name}</strong><small>场景 v{asset.scenarioVersion ?? "-"} · {asset.path || "无说明"}</small></span><Icon name={form.targets.some((item) => item.id === asset.id) ? "check_circle" : "add_circle"} /></button>)}{!assetsLoading && assets.length === 0 && <p className="plan-empty-copy">暂无可绑定的测试场景。</p>}</div></div>
           </section>
           <aside className="plan-editor-side">
             <div className="plan-form-section"><div className="plan-section-head"><div><h4>已选执行顺序</h4><small className="plan-section-hint">使用箭头调整执行顺序</small></div><span className="plan-section-count">{form.targets.length} 项</span></div><div className="selected-targets">{form.targets.map((target, index) => <div className="selected-target" key={target.id}><b>{index + 1}</b><span><strong>{target.name}</strong><small>SCENARIO · v{target.scenarioVersion ?? "-"}</small></span><button disabled={index === 0} onClick={() => moveTarget(index, -1)} title="上移" type="button"><Icon name="arrow_upward" /></button><button disabled={index === form.targets.length - 1} onClick={() => moveTarget(index, 1)} title="下移" type="button"><Icon name="arrow_downward" /></button><button className="danger" onClick={() => toggleTarget(target)} title="移除" type="button"><Icon name="close" /></button></div>)}{form.targets.length === 0 && <div className="plan-empty-selection"><Icon name="playlist_add" /><strong>尚未选择执行目标</strong><span>从左侧选择场景，它们会按加入顺序执行</span></div>}</div></div>
@@ -594,7 +640,8 @@ function ScheduleCalendar({ environments, plans, schedule }: { environments: Env
 }
 
 function RunHistory({ onClear, onDelete, runs }: { onClear: () => void; onDelete: (run: PlanRun) => void; runs: PlanRun[] }) {
+  const pagination = usePagination(runs, 10, String(runs.length));
   return (
-    <article className="panel"><div className="panel-title"><div><h3>计划执行历史</h3><p className="plan-panel-hint">记录当前项目从测试计划发起的运行</p></div><button disabled={runs.length === 0} onClick={onClear} type="button">清空历史</button></div>{runs.length === 0 ? <div className="list-state empty"><span className="list-state-icon"><Icon name="history" /></span><h4>暂无执行历史</h4><p>从计划列表手动运行计划后，结果会显示在这里。</p></div> : <table className="data-table plan-history-table"><thead><tr><th>运行编号</th><th>计划</th><th>环境</th><th>状态</th><th>目标结果</th><th>耗时</th><th>触发时间</th><th>操作</th></tr></thead><tbody>{runs.map((run) => <tr key={run.id}><td><strong>{run.id}</strong><small>{run.operator}</small></td><td>{run.planName}</td><td>{run.environmentName ?? "-"}</td><td><span className={`status ${run.status === "passed" ? "status-通过" : run.status === "failed" ? "status-失败" : "status-muted"}`}>{run.status}</span></td><td>{run.passedCount} 通过 / {run.failedCount} 失败 / {run.targetCount} 总计</td><td>{run.durationMs ? `${(run.durationMs / 1000).toFixed(1)}s` : "-"}</td><td>{formatDate(run.startedAt)}</td><td><button className="icon-btn" onClick={() => onDelete(run)} title="删除执行记录" type="button"><Icon name="delete" /></button></td></tr>)}</tbody></table>}</article>
+    <article className="panel"><div className="panel-title"><div><h3>计划执行历史</h3><p className="plan-panel-hint">记录当前项目从测试计划发起的运行</p></div><button disabled={runs.length === 0} onClick={onClear} type="button">清空历史</button></div>{runs.length === 0 ? <div className="list-state empty"><span className="list-state-icon"><Icon name="history" /></span><h4>暂无执行历史</h4><p>从计划列表手动运行计划后，结果会显示在这里。</p></div> : <><table className="data-table plan-history-table"><thead><tr><th>运行编号</th><th>计划</th><th>环境</th><th>状态</th><th>目标结果</th><th>耗时</th><th>触发时间</th><th>操作</th></tr></thead><tbody>{pagination.pageItems.map((run) => <tr key={run.id}><td><strong>{run.id}</strong><small>{run.operator}</small></td><td>{run.planName}</td><td>{run.environmentName ?? "-"}</td><td><span className={`status ${run.status === "passed" ? "status-通过" : run.status === "failed" ? "status-失败" : "status-muted"}`}>{run.status}</span></td><td>{run.passedCount} 通过 / {run.failedCount} 失败 / {run.targetCount} 总计</td><td>{run.durationMs ? `${(run.durationMs / 1000).toFixed(1)}s` : "-"}</td><td>{formatDate(run.startedAt)}</td><td><button className="icon-btn" onClick={() => onDelete(run)} title="删除执行记录" type="button"><Icon name="delete" /></button></td></tr>)}</tbody></table><Pagination itemLabel="条记录" onPageChange={pagination.setPage} onPageSizeChange={pagination.setPageSize} page={pagination.page} pageSize={pagination.pageSize} total={runs.length} /></>}</article>
   );
 }

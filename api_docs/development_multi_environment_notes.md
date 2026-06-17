@@ -1,5 +1,8 @@
 # 测试用例多环境保存开发记录
 
+状态：历史实施记录，当前接口以
+[api_test_case_multi_environment.md](api_test_case_multi_environment.md) 为准。
+
 ## 模块职责
 
 本次变更支持前端在创建、编辑接口测试用例时选择多个环境保存。后端负责校验环境归属、保存默认执行环境、维护多环境关联关系，并在列表接口返回 `environment_ids` 供前端展示。

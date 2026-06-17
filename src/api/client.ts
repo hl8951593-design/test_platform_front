@@ -22,6 +22,26 @@ interface TokenRefreshResult {
   user?: unknown;
 }
 
+export class EventStreamRequestError extends Error {
+  code?: string;
+  detailUrl?: string;
+  status: number;
+
+  constructor(message: string, status: number, payload?: unknown) {
+    super(message);
+    this.name = "EventStreamRequestError";
+    this.status = status;
+    const source = payload as { code?: unknown; detail_url?: unknown; data?: unknown } | null;
+    const nested = source?.data && typeof source.data === "object"
+      ? source.data as { code?: unknown; detail_url?: unknown }
+      : undefined;
+    const code = nested?.code ?? source?.code;
+    const detailUrl = nested?.detail_url ?? source?.detail_url;
+    this.code = code === undefined ? undefined : String(code);
+    this.detailUrl = detailUrl === undefined ? undefined : String(detailUrl);
+  }
+}
+
 let refreshPromise: Promise<string> | null = null;
 
 export function clearSession() {
@@ -131,6 +151,15 @@ function buildJsonHeaders(headers?: HeadersInit, withAuth = false) {
   return nextHeaders;
 }
 
+function resolveApiUrl(path: string) {
+  if (/^https?:\/\//i.test(path)) return path;
+  if (path.startsWith("/api/")) {
+    const base = new URL(API_BASE_URL);
+    return `${base.origin}${path}`;
+  }
+  return `${API_BASE_URL}${path}`;
+}
+
 export async function requestPublic<T>(path: string, init: RequestInit = {}) {
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...init,
@@ -158,6 +187,33 @@ export async function requestWithAuth<T>(path: string, init: RequestInit = {}) {
   }
 
   return parseJsonResponse<T>(response, "接口请求失败，请稍后重试");
+}
+
+export async function requestEventStreamWithAuth(path: string, init: RequestInit = {}) {
+  if (shouldRefreshAccessToken()) await refreshAccessToken();
+
+  const headers = new Headers(init.headers);
+  headers.set("Accept", "text/event-stream");
+  const token = localStorage.getItem("access_token");
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+
+  const response = await fetch(resolveApiUrl(path), { ...init, headers });
+  if (response.status === 401) {
+    const payload = await response.json().catch(() => null);
+    const message = getResponseMessage(payload, "登录凭证已过期，请重新登录");
+    notifyAuthExpired(message);
+    throw new Error(message);
+  }
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null);
+    throw new EventStreamRequestError(
+      getResponseMessage(payload, "场景实时事件连接失败"),
+      response.status,
+      payload,
+    );
+  }
+  if (!response.body) throw new Error("场景实时事件响应缺少流数据");
+  return response;
 }
 
 async function parseJsonResponse<T>(response: Response, fallbackMessage: string) {
