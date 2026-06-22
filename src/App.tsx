@@ -32,7 +32,7 @@ function readAuthUser(): AuthUser | null {
 }
 
 function getRouteFromUrl(): RouteKey {
-  const path = window.location.pathname.replace("/", "").toLowerCase();
+  const path = window.location.pathname.split("/").filter(Boolean)[0]?.toLowerCase() ?? "";
   const match = routes.find((route) => route.key === path);
   return match?.key ?? "dashboard";
 }
@@ -262,6 +262,7 @@ export default function App() {
   const navigate = useCallback((key: RouteKey) => {
     setActiveRoute(key);
     window.history.pushState(null, "", `/${key}#/`);
+    window.dispatchEvent(new PopStateEvent("popstate"));
   }, []);
 
   useEffect(() => {

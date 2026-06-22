@@ -4,6 +4,7 @@ import { ScenariosPage } from "./ScenariosPage";
 const api = vi.hoisted(() => {
   const scenariosByProject = new Map<number, any[]>();
   const runsByProject = new Map<number, any[]>();
+  const editorScenario = (scenario: any) => scenario && ({ ...scenario, steps: scenario.steps.map((step: any) => ({ nodeId: step.nodeId ?? `NODE-${step.id}`, actionPosition: step.actionPosition ?? "main", ...step })) });
   const save = async (projectId: number, input: any) => {
     const existing = (scenariosByProject.get(projectId) ?? []).find((item) => item.id === input.id);
     const scenario = {
@@ -33,7 +34,7 @@ const api = vi.hoisted(() => {
       name: `${source.name} - 副本`,
     })),
     getScenario: vi.fn(async (projectId: number, scenarioId: string) =>
-      (scenariosByProject.get(projectId) ?? []).find((item) => item.id === scenarioId)),
+      editorScenario((scenariosByProject.get(projectId) ?? []).find((item) => item.id === scenarioId))),
     getScenarioRun: vi.fn(async (projectId: number, runId: string) =>
       (runsByProject.get(projectId) ?? []).find((item) => item.id === runId)),
     listScenarioRuns: vi.fn(async (projectId: number) => runsByProject.get(projectId) ?? []),
@@ -160,6 +161,26 @@ function mockAssets() {
     } as Response);
 }
 
+async function addMainAction(name: RegExp) {
+  const sidebar = document.querySelector(".scenario-sidebar") as HTMLElement;
+  const assetList = document.querySelector(".scenario-asset-list") as HTMLElement;
+  fireEvent.click(await within(assetList).findByRole("button", { name }));
+}
+
+async function addAttachedAction(name: RegExp, position: "前置" | "后置" = "前置") {
+  fireEvent.click(screen.getByRole("button", { name: `添加${position}动作` }));
+  const picker = screen.getByRole("dialog", { name: `添加${position}动作` });
+  fireEvent.click(within(picker).getByRole("button", { name }));
+}
+
+function expandRequestConfig() {
+  const toggles = screen.getAllByRole("button", { name: /请求配置/ });
+  const toggle = toggles[toggles.length - 1];
+  expect(toggle).toHaveAttribute("aria-expanded", "false");
+  fireEvent.click(toggle);
+  expect(toggle).toHaveAttribute("aria-expanded", "true");
+}
+
 describe("ScenariosPage", () => {
   beforeEach(() => {
     api.scenariosByProject.clear();
@@ -177,13 +198,24 @@ describe("ScenariosPage", () => {
 
     fireEvent.click(screen.getByTitle("新建场景"));
     fireEvent.change(screen.getByLabelText("场景名称"), { target: { value: "登录消息场景" } });
-    fireEvent.click(await screen.findByRole("button", { name: /登录接口/ }));
+    await addMainAction(/登录接口/);
+    expect(screen.getByText("测试用例节点 1")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "添加后置动作" }));
+    const teardownPicker = screen.getByRole("dialog", { name: "添加后置动作" });
+    expect(within(teardownPicker).getByText(/动作将绑定/)).toBeInTheDocument();
+    fireEvent.click(within(teardownPicker).getByRole("button", { name: /生成随机值/ }));
     expect(screen.queryByText("高级配置 JSON")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("步骤配置 JSON")).not.toBeInTheDocument();
+    expect(screen.getByText("随机值生成")).toBeInTheDocument();
+    expect(screen.getByText("后置 · 始终执行")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "保存场景" }));
 
-    expect(await screen.findByText(/1 步骤 · 1 数据集 · v1/)).toBeInTheDocument();
-    expect(api.saveScenario).toHaveBeenCalledWith(7, expect.objectContaining({ id: "", version: 0 }));
+    expect(await screen.findByText(/2 步骤 · 1 数据集 · v1/)).toBeInTheDocument();
+    expect(api.saveScenario).toHaveBeenCalledWith(7, expect.objectContaining({
+      id: "",
+      version: 0,
+      steps: expect.arrayContaining([expect.objectContaining({ actionPosition: "after" })]),
+    }));
 
     fireEvent.click(screen.getByRole("button", { name: "运行场景" }));
     await waitFor(() => expect(screen.getByRole("button", { name: "调试记录" })).toHaveClass("active"));
@@ -191,11 +223,13 @@ describe("ScenariosPage", () => {
     expect(api.runScenario).toHaveBeenCalled();
 
     fireEvent.click(screen.getByText("UAT · 默认数据").closest("summary") as HTMLElement);
-    fireEvent.click(screen.getByText("登录接口").closest("summary") as HTMLElement);
-    expect(screen.getByText("执行通过")).toBeInTheDocument();
-    const requestSection = screen.getByText("请求信息").closest("details") as HTMLDetailsElement;
-    const responseSection = screen.getByText("响应信息").closest("details") as HTMLDetailsElement;
-    const assertionSection = screen.getByText("断言结果").closest("details") as HTMLDetailsElement;
+    const runStepSummary = screen.getAllByText("登录接口").find((element) => element.closest("summary"))?.closest("summary") as HTMLElement;
+    fireEvent.click(runStepSummary);
+    expect(screen.getAllByText("执行通过").length).toBeGreaterThan(0);
+    const runStep = runStepSummary.closest(".scenario-run-step") as HTMLElement;
+    const requestSection = within(runStep).getByText("请求信息").closest("details") as HTMLDetailsElement;
+    const responseSection = within(runStep).getByText("响应信息").closest("details") as HTMLDetailsElement;
+    const assertionSection = within(runStep).getByText("断言结果").closest("details") as HTMLDetailsElement;
     expect(requestSection).not.toHaveAttribute("open");
     expect(responseSection).not.toHaveAttribute("open");
     expect(assertionSection).not.toHaveAttribute("open");
@@ -210,7 +244,26 @@ describe("ScenariosPage", () => {
     expect(within(responseSection).getByText("Response Body")).toBeInTheDocument();
     fireEvent.click(within(assertionSection).getByText("断言结果").closest("summary") as HTMLElement);
     expect(assertionSection).toHaveAttribute("open");
-    expect(screen.getByText("HTTP 状态码")).toBeInTheDocument();
+    expect(within(assertionSection).getByText("HTTP 状态码")).toBeInTheDocument();
+  });
+
+  it("opens a phase-specific action picker from each canvas section", async () => {
+    mockAssets();
+    render(<ScenariosPage environmentId={1} environments={environments} onAction={vi.fn()} projectId={8} />);
+
+    fireEvent.click(screen.getByTitle("新建场景"));
+    await addMainAction(/登录接口/);
+    fireEvent.click(screen.getByRole("button", { name: "添加前置动作" }));
+    const setupPicker = screen.getByRole("dialog", { name: "添加前置动作" });
+    expect(within(setupPicker).getByPlaceholderText("搜索可添加的前置动作")).toBeInTheDocument();
+    expect(within(setupPicker).getByText("准备数据、变量与依赖")).toBeInTheDocument();
+    expect(await within(setupPicker).findByRole("button", { name: /登录接口/ })).toBeInTheDocument();
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "添加前置动作" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "添加后置动作" }));
+    expect(screen.getByRole("dialog", { name: "添加后置动作" })).toBeInTheDocument();
   });
 
   it("supports step ordering and server-backed datasets", async () => {
@@ -218,11 +271,11 @@ describe("ScenariosPage", () => {
     render(<ScenariosPage environmentId={1} environments={environments} onAction={vi.fn()} projectId={3} />);
 
     fireEvent.click(screen.getByTitle("新建场景"));
-    fireEvent.click(await screen.findByRole("button", { name: /登录接口/ }));
-    fireEvent.click(screen.getByRole("button", { name: /等待事件/ }));
-    const waitStep = screen.getAllByText("等待事件").find((element) => element.closest(".scenario-step-card"))?.closest(".scenario-step-card") as HTMLElement;
-    fireEvent.click(within(waitStep).getByTitle("上移"));
-    expect(document.querySelectorAll(".scenario-step-card")[0]).toHaveTextContent("等待事件");
+    await addMainAction(/登录接口/);
+    await addMainAction(/消息订阅/);
+    const websocketStep = screen.getAllByText("消息订阅").find((element) => element.closest(".scenario-step-card"))?.closest(".scenario-step-card") as HTMLElement;
+    fireEvent.click(within(websocketStep).getByTitle("上移"));
+    expect(document.querySelectorAll(".scenario-step-card")[0]).toHaveTextContent("消息订阅");
 
     fireEvent.click(screen.getByRole("button", { name: "数据驱动" }));
     fireEvent.click(screen.getByRole("button", { name: "新增数据集" }));
@@ -233,7 +286,7 @@ describe("ScenariosPage", () => {
 
     await waitFor(() => expect(api.saveScenario).toHaveBeenCalledWith(3, expect.objectContaining({
       datasets: expect.arrayContaining([expect.objectContaining({ name: "VIP 用户" })]),
-      steps: expect.arrayContaining([expect.objectContaining({ name: "等待事件" })]),
+      steps: expect.arrayContaining([expect.objectContaining({ name: "消息订阅" })]),
     })));
   });
 
@@ -242,14 +295,15 @@ describe("ScenariosPage", () => {
     render(<ScenariosPage environmentId={1} environments={environments} onAction={vi.fn()} projectId={5} />);
 
     fireEvent.click(screen.getByTitle("新建场景"));
-    fireEvent.click(screen.getByRole("button", { name: /条件判断/ }));
+    await addMainAction(/登录接口/);
+    await addAttachedAction(/条件判断/);
     expect(screen.getByText("判断条件")).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("条件判断变量"), { target: { value: "orderStatus" } });
     fireEvent.change(screen.getByLabelText("条件比较方式"), { target: { value: "!=" } });
     fireEvent.change(screen.getByLabelText("条件值类型"), { target: { value: "number" } });
     fireEvent.change(screen.getByLabelText("条件期望值"), { target: { value: "500" } });
 
-    fireEvent.click(screen.getByRole("button", { name: /等待事件/ }));
+    await addAttachedAction(/等待事件/);
     expect(screen.getByText("等待条件")).toBeInTheDocument();
     expect(screen.getByLabelText("等待时间单位")).toHaveValue("s");
     fireEvent.change(screen.getByLabelText("等待时长"), { target: { value: "5" } });
@@ -263,6 +317,39 @@ describe("ScenariosPage", () => {
     expect(conditionStep.path).toBe("{{orderStatus}} != 500");
     expect(JSON.parse(waitStep.configText)).toEqual(expect.objectContaining({ duration_ms: 5000 }));
     expect(waitStep.path).toBe("等待 5 秒");
+  });
+
+  it("binds random, fixed-value, and script tools to a test-case node", async () => {
+    mockAssets();
+    render(<ScenariosPage environmentId={1} environments={environments} onAction={vi.fn()} projectId={15} />);
+    fireEvent.click(screen.getByTitle("新建场景"));
+    await addMainAction(/登录接口/);
+
+    await addAttachedAction(/生成随机值/);
+    fireEvent.change(screen.getByLabelText("随机值输出变量"), { target: { value: "orderNo" } });
+    fireEvent.change(screen.getByLabelText("随机值类型"), { target: { value: "uuid" } });
+
+    await addAttachedAction(/设置固定值/, "后置");
+    fireEvent.change(screen.getByLabelText("固定值输出变量"), { target: { value: "cleanupResult" } });
+    fireEvent.change(screen.getByLabelText("固定值 JSON"), { target: { value: "true" } });
+
+    await addAttachedAction(/执行脚本/);
+    fireEvent.change(screen.getByLabelText("脚本语言"), { target: { value: "javascript" } });
+    fireEvent.change(screen.getByLabelText("脚本输入变量"), { target: { value: "token" } });
+    expect(screen.getByText(/输入变量不来自前置节点：token/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "保存场景" }));
+    expect(api.saveScenario).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByLabelText("脚本输入变量"), { target: { value: "orderNo" } });
+    fireEvent.change(screen.getByLabelText("脚本输出变量"), { target: { value: "result" } });
+    expect(await screen.findByRole("textbox", { name: "脚本代码" })).toHaveAttribute("contenteditable", "true");
+    fireEvent.click(screen.getByRole("button", { name: "保存场景" }));
+
+    await waitFor(() => expect(api.saveScenario).toHaveBeenCalled());
+    const saved = api.saveScenario.mock.calls[api.saveScenario.mock.calls.length - 1]?.[1];
+    expect(saved.steps.filter((step: any) => step.nodeId === saved.steps[0].nodeId)).toHaveLength(4);
+    expect(saved.steps.find((step: any) => step.kind === "random")).toEqual(expect.objectContaining({ actionPosition: "before" }));
+    expect(JSON.parse(saved.steps.find((step: any) => step.kind === "fixed_value").configText)).toEqual(expect.objectContaining({ output: "cleanupResult", value: true }));
+    expect(JSON.parse(saved.steps.find((step: any) => step.kind === "script").configText)).toEqual(expect.objectContaining({ language: "javascript", inputs: ["orderNo"], outputs: ["result"] }));
   });
 
   it("shows realtime recovery status and calibrates from run detail after an event gap", async () => {
@@ -279,7 +366,7 @@ describe("ScenariosPage", () => {
     render(<ScenariosPage environmentId={1} environments={environments} onAction={vi.fn()} projectId={6} />);
 
     fireEvent.click(screen.getByTitle("新建场景"));
-    fireEvent.click(screen.getByRole("button", { name: /等待事件/ }));
+    await addMainAction(/登录接口/);
     fireEvent.click(screen.getByRole("button", { name: "运行场景" }));
 
     expect(await screen.findByText("运行状态已按服务端详情完成校准")).toBeInTheDocument();
@@ -392,7 +479,7 @@ describe("ScenariosPage", () => {
     })));
   });
 
-  it("navigates from the dataset overview metric to the data-driven module", async () => {
+  it("opens dataset records from the data-driven tab", async () => {
     mockAssets();
     api.scenariosByProject.set(7, [{
       id: "SCENARIO-NAV",
@@ -432,7 +519,7 @@ describe("ScenariosPage", () => {
     fireEvent.click(await screen.findByRole("button", { name: /核心下单流程/ }));
     await waitFor(() => expect(screen.getByLabelText("场景名称")).toHaveValue("核心下单流程"));
 
-    fireEvent.click(screen.getByRole("button", { name: "查看数据集" }));
+    fireEvent.click(screen.getByRole("button", { name: "数据驱动" }));
 
     expect(screen.getByRole("button", { name: "数据驱动" })).toHaveClass("active");
     expect(screen.getByText("请求数据驱动")).toBeInTheDocument();
@@ -772,7 +859,8 @@ describe("ScenariosPage", () => {
     render(<ScenariosPage environmentId={1} environments={environments} onAction={vi.fn()} projectId={7} />);
 
     fireEvent.click(screen.getByTitle("新建场景"));
-    fireEvent.click(await screen.findByRole("button", { name: /登录接口/ }));
+    await addMainAction(/登录接口/);
+    expandRequestConfig();
     fireEvent.change(screen.getByLabelText("请求头 1 值"), { target: { value: "Bearer debug-token" } });
     const assertionToggle = screen.getByRole("button", { name: /断言/ });
     expect(assertionToggle).toHaveAttribute("aria-expanded", "false");
@@ -784,14 +872,17 @@ describe("ScenariosPage", () => {
     fireEvent.change(screen.getByLabelText("断言 1 类型"), { target: { value: "json_equals" } });
     fireEvent.change(screen.getByLabelText("断言 1 JSON 路径"), { target: { value: "code" } });
     fireEvent.change(screen.getByLabelText("断言 1 预期值"), { target: { value: "0" } });
-    fireEvent.click(screen.getByTitle("单独执行步骤"));
-    expect(screen.getByTitle("单独执行步骤")).toHaveClass("run", "loading");
-    expect(screen.getByTitle("单独执行步骤").querySelector(".material-symbols-outlined")).toHaveTextContent("progress_activity");
-    expect(screen.getByRole("button", { name: "执行中" })).toHaveClass("loading");
+    fireEvent.click(screen.getByRole("button", { name: "执行步骤" }));
+    expect(screen.getByRole("button", { name: "执行步骤" })).toHaveClass("loading");
 
-    const expandResponseButton = await screen.findByRole("button", { name: "展开响应" });
-    expect(expandResponseButton.parentElement).toHaveClass("scenario-debug-toolbar-actions");
-    fireEvent.click(expandResponseButton);
+    const responseExpand = await screen.findByRole("button", { name: "展开响应信息" });
+    expect(screen.queryByRole("dialog", { name: "登录接口 调试响应" })).not.toBeInTheDocument();
+    const responseCard = responseExpand.closest(".scenario-debug-response-card") as HTMLElement;
+    expect(responseCard).toHaveTextContent("响应信息");
+    expect(responseCard).toHaveTextContent("36 ms");
+    expect(responseCard).toHaveTextContent("200");
+    fireEvent.click(responseExpand);
+    const responseDialog = screen.getByRole("dialog", { name: "登录接口 调试响应" });
     const executeCall = fetchMock.mock.calls.find(([url]) => String(url).includes("/test-cases/execute-unsaved"));
     expect(executeCall).toBeDefined();
     expect(JSON.parse(String((executeCall?.[1] as RequestInit).body))).toEqual(expect.objectContaining({
@@ -801,7 +892,6 @@ describe("ScenariosPage", () => {
       body: { company_id: "", order: { user_id: "" } },
       assertions: [{ type: "json_equals", path: "code", expected: 0 }],
     }));
-    const responseDialog = screen.getByRole("dialog", { name: "登录接口 调试响应" });
     expect(within(responseDialog).queryByText("company_id")).not.toBeInTheDocument();
     expect(within(responseDialog).getByRole("button", { name: "展开 data" })).toHaveAttribute("aria-expanded", "false");
     fireEvent.change(within(responseDialog).getByLabelText("搜索响应字段"), { target: { value: "company_id" } });
@@ -814,6 +904,7 @@ describe("ScenariosPage", () => {
     expect(within(responseDialog).getByText("9527")).toBeInTheDocument();
     expect(within(responseDialog).getByText("company_name")).toBeInTheDocument();
     fireEvent.click(within(responseDialog).getByRole("button", { name: "将 data.company_id 设为断言" }));
+    fireEvent.click(within(responseDialog).getByRole("button", { name: "将 data.company_id 设为变量" }));
     expect(within(responseDialog).queryByTitle("全部收起响应节点")).not.toBeInTheDocument();
     expect(within(responseDialog).getByRole("button", { name: "收起 data" })).toHaveAttribute("aria-expanded", "true");
     fireEvent.click(within(responseDialog).getByTitle("关闭响应详情"));
@@ -821,8 +912,6 @@ describe("ScenariosPage", () => {
     expect(screen.getByLabelText("断言 2 类型")).toHaveValue("json_equals");
     expect(screen.getByLabelText("断言 2 JSON 路径")).toHaveValue("data.company_id");
     expect(screen.getByLabelText("断言 2 预期值")).toHaveValue("9527");
-    fireEvent.click(await screen.findByRole("button", { name: "将 data.company_id 设为变量" }));
-
     expect(screen.getByLabelText("取值变量名")).toHaveValue("company_id");
     expect(screen.getByLabelText("响应 JSON 路径")).toHaveValue("data.company_id");
     expect(screen.getByText("本次调试取值").closest("small")).toHaveTextContent("9527");
@@ -851,12 +940,16 @@ describe("ScenariosPage", () => {
     render(<ScenariosPage environmentId={1} environments={environments} onAction={vi.fn()} projectId={7} />);
 
     fireEvent.click(screen.getByTitle("新建场景"));
-    fireEvent.click(await screen.findByRole("button", { name: /登录接口/ }));
+    await addMainAction(/登录接口/);
     const stepCard = document.querySelector(".scenario-step-card") as HTMLElement;
     fireEvent.click(within(stepCard).getByTitle("单独执行步骤"));
 
     await waitFor(() => expect(stepCard).toHaveClass("debug-failed"));
     expect(stepCard).toHaveTextContent("单步失败 · 559ms");
+    const responseCard = screen.getByRole("button", { name: "展开响应信息" }).closest(".scenario-debug-response-card") as HTMLElement;
+    expect(responseCard).toHaveClass("failed");
+    expect(responseCard).toHaveTextContent("请求未授权");
+    expect(screen.queryByRole("dialog", { name: "登录接口 调试响应" })).not.toBeInTheDocument();
   });
 
   it("edits request headers, query, and body for a scenario step", async () => {
@@ -864,7 +957,8 @@ describe("ScenariosPage", () => {
     render(<ScenariosPage environmentId={1} environments={environments} onAction={vi.fn()} projectId={7} />);
 
     fireEvent.click(screen.getByTitle("新建场景"));
-    fireEvent.click(await screen.findByRole("button", { name: /登录接口/ }));
+    await addMainAction(/登录接口/);
+    expandRequestConfig();
     fireEvent.change(screen.getByLabelText("请求头 1 值"), { target: { value: "Bearer scenario-token" } });
     fireEvent.click(screen.getByRole("button", { name: /Query/ }));
     fireEvent.change(screen.getByLabelText("Query 参数 1 值"), { target: { value: "tenant-9" } });
@@ -888,13 +982,14 @@ describe("ScenariosPage", () => {
     render(<ScenariosPage environmentId={1} environments={environments} onAction={vi.fn()} projectId={7} />);
 
     fireEvent.click(screen.getByTitle("新建场景"));
-    fireEvent.click(await screen.findByRole("button", { name: /登录接口/ }));
+    await addMainAction(/登录接口/);
     const extractionSection = screen.getByText("响应取值").closest("section") as HTMLElement;
     fireEvent.click(within(extractionSection).getByRole("button", { name: "新增" }));
     fireEvent.change(screen.getByLabelText("取值变量名"), { target: { value: "companyId" } });
     fireEvent.change(screen.getByLabelText("响应 JSON 路径"), { target: { value: "data.company_id" } });
 
-    fireEvent.click(screen.getByRole("button", { name: /登录接口/ }));
+    await addMainAction(/登录接口/);
+    expandRequestConfig();
     fireEvent.click(screen.getByRole("button", { name: "Body" }));
     const bodyVariableSelect = screen.getByLabelText("请求体 company_id 引用上游变量") as HTMLSelectElement;
     fireEvent.change(bodyVariableSelect, { target: { value: bodyVariableSelect.options[1].value } });
@@ -1063,6 +1158,7 @@ describe("ScenariosPage", () => {
     expect(within(document.querySelector(".scenario-inspector") as HTMLElement).getByText(/本次调试取值/)).toHaveTextContent("2048");
 
     fireEvent.click(cards[1]);
+    expandRequestConfig();
     fireEvent.click(screen.getByRole("button", { name: /Query/ }));
     const inspector = document.querySelector(".scenario-inspector") as HTMLElement;
     expect(within(inspector).getByText(/本次值/)).toHaveTextContent("9527");
@@ -1166,7 +1262,7 @@ describe("ScenariosPage", () => {
     render(<ScenariosPage environmentId={1} environments={environments} onAction={vi.fn()} projectId={9} />);
 
     fireEvent.click(screen.getByTitle("新建场景"));
-    fireEvent.click(screen.getByRole("button", { name: /等待事件/ }));
+    await addMainAction(/登录接口/);
     fireEvent.click(screen.getByRole("button", { name: "保存场景" }));
     await screen.findByText(/1 步骤 · 1 数据集 · v1/);
     fireEvent.click(screen.getByRole("button", { name: "复制" }));

@@ -10,6 +10,7 @@
 | [frontend-development-plan.md](frontend-development-plan.md) | 前端当前完成状态、质量基线、优先级和后续开发计划 |
 | [technical-architecture.md](technical-architecture.md) | 项目整体技术架构、模块关系、权限与数据边界 |
 | [frontend-feature-logic.md](frontend-feature-logic.md) | 当前页面功能、业务流程和交互逻辑 |
+| [style.md](style.md) | 前端整体 UI 风格、视觉语义、组件状态和可访问性规范 |
 | [frontend-performance.md](frontend-performance.md) | 性能、请求竞态和前端维护约定 |
 
 ## 业务模块
@@ -19,7 +20,7 @@
 | [scenario-composer-architecture.md](scenario-composer-architecture.md) | 场景组合、单步调试、变量关系、异步执行和实时动画架构 |
 | [test-plan-architecture.md](test-plan-architecture.md) | 测试计划数据模型、版本、调度和执行边界 |
 | [visual-flow-architecture.md](visual-flow-architecture.md) | 可视化编排节点、连线、变量关系和执行模型 |
-| [defect-tracking-architecture.md](defect-tracking-architecture.md) | 缺陷记录、富文本内容和 Bug 状态流转流程 |
+| [defect-tracking-architecture.md](defect-tracking-architecture.md) | 缺陷记录、富文本内容、图片附件和 Bug 状态流转流程 |
 | [../api_docs/api_environment_configs.md](../api_docs/api_environment_configs.md) | 环境配置接口与数据关系 |
 
 ## 场景执行契约
@@ -40,6 +41,7 @@
 | [../api_docs/api_test_plans.md](../api_docs/api_test_plans.md) | 测试计划、调度和运行历史接口 |
 | [../api_docs/api_visual_flows.md](../api_docs/api_visual_flows.md) | 可视化编排后端接口 |
 | [../api_docs/api_defects.md](../api_docs/api_defects.md) | 缺陷跟踪、状态流转和富文本内容接口 |
+| [../api_docs/api_media.md](../api_docs/api_media.md) | 缺陷图片上传、临时地址刷新和删除接口 |
 | [../api_docs/visual_flow_schema.json](../api_docs/visual_flow_schema.json) | FlowDefinition JSON Schema |
 
 功能变更应优先同步模块技术文档和 `frontend-feature-logic.md`；架构、权限或数据归属变化还需同步 `technical-architecture.md`；未完成工作更新到 `frontend-development-plan.md`。提交前运行 `npm run docs:check`。

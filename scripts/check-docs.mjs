@@ -39,6 +39,7 @@ for (const file of markdownFiles) {
 const index = readFileSync(join(root, "docs", "README.md"), "utf8");
 [
   "documentation-governance.md",
+  "style.md",
   "scenario-data-driven-contract.md",
   "scenario-run-events-contract.md",
   "scenario-run-detail-contract.md",

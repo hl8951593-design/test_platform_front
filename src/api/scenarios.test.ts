@@ -31,15 +31,12 @@ describe("scenarios API", () => {
         version: 3,
         name: "登录下单",
         environment_id: 2,
-        steps: [{
-          id: "STEP-1",
-          kind: "api_case",
-          reference_id: 9,
+        nodes: [{
+          id: "NODE-1",
           name: "登录",
-          method: "POST",
-          path: "/login",
-          config: { extract: "token" },
-          continue_on_failure: false,
+          before_actions: [],
+          test_case: { id: "STEP-1", kind: "api_case", reference_id: 9, name: "登录", method: "POST", path: "/login", config: { extract: "token" }, continue_on_failure: false },
+          after_actions: [],
         }],
         datasets: [{
           id: "DATA-1",
@@ -64,6 +61,8 @@ describe("scenarios API", () => {
       steps: [expect.objectContaining({
         referenceId: 9,
         configText: '{\n  "extract": "token"\n}',
+        nodeId: "NODE-1",
+        actionPosition: "main",
       })],
       datasets: [expect.objectContaining({
         variablesText: '{\n  "username": "tester"\n}',
@@ -89,7 +88,7 @@ describe("scenarios API", () => {
       version: 4,
       name: "登录下单",
       environment_id: 2,
-      steps: [],
+      nodes: [],
       datasets: [],
     }));
 
@@ -103,6 +102,8 @@ describe("scenarios API", () => {
       tags: [],
       steps: [{
         id: "STEP-1",
+        nodeId: "NODE-1",
+        actionPosition: "main",
         kind: "api_case",
         referenceId: 9,
         name: "登录",
@@ -146,10 +147,11 @@ describe("scenarios API", () => {
     expect(JSON.parse(String(init?.body))).toEqual(expect.objectContaining({
       version: 3,
       environment_id: 2,
-      steps: [expect.objectContaining({
-        reference_id: 9,
-        config: { extract: "token" },
-        continue_on_failure: false,
+      nodes: [expect.objectContaining({
+        id: "NODE-1",
+        before_actions: [],
+        test_case: expect.objectContaining({ reference_id: 9, config: { extract: "token" }, continue_on_failure: false }),
+        after_actions: [],
       })],
       datasets: [expect.objectContaining({
         variables: { username: "tester" },

@@ -57,7 +57,7 @@
 | 场景组合 | `/scenarios` | 已接真实接口与 SSE | 按项目组合 HTTP/WebSocket 用例、条件和等待步骤，维护断言、数据集、变量关系并实时执行 | `/scenarios`、`/scenario-runs`、SSE 事件流 |
 | 接口测试用例 | `/api` | 已接真实接口 | 统一维护 HTTP、WebSocket 用例定义、连接/请求数据、断言和响应，为自动化测试提供接口数据源 | `/test-cases`、`/websocket-test-cases` |
 | 执行中心 | `/executions` | 前端展示 | 执行队列、执行状态、失败任务终止入口 | `executionRows` |
-| 缺陷跟踪 | `/defects` | 已接目标接口 | 按项目记录 Bug，维护标题、指派人、类型、紧急程度、富文本内容和状态流程 | `/defects` |
+| 缺陷跟踪 | `/defects` | 已接真实接口 | 按项目记录 Bug，维护标题、指派人、类型、紧急程度、富文本内容、图片附件和状态流程 | `/defects`、`/media` |
 | 测试报告 | `/reports` | 前端展示 | 报告指标、失败聚类、AI 分析与补充用例入口 | 页面内静态数据 |
 | 环境配置 | 顶部环境下拉、导航底部按钮 | 已接真实接口 | 按项目查询和维护环境、变量与绑定用例 | `/environment-configs?project_id={project_id}` |
 | 系统设置 | 路由元数据存在 | 待实现 | 用户、角色、系统配置 | 待确认 |
@@ -284,6 +284,7 @@ Authorization: Bearer <access_token>
 | 执行记录 | `execution_id`、`project_id`、`trigger_user_id` | 项目内可见，个人触发记录可单独筛选 |
 | 测试报告 | `report_id`、`execution_id`、`project_id` | 跟随执行记录权限 |
 | 缺陷 | `defect_id`、`project_id`、`assignee_id` 或 `assignee` | 跟随项目权限，状态流转和删除需要操作权限 |
+| 缺陷媒体 | `media_id`、`project_id`、`defect_id`、`uploader_id` | 私有对象存储，上传、绑定、读取和删除均校验项目与缺陷权限；浏览器只接收短期预签名 URL |
 | 环境配置 | `environment_id`、`project_id` | 需要单独限制编辑权限 |
 
 ## 业务逻辑关系
@@ -315,11 +316,12 @@ flowchart LR
 - 测试计划负责组织执行批次，绑定明确的场景版本与环境，并通过后端生成计划运行和调度记录。
 - 接口测试用例是接口数据源，场景组合和可视化编排引用它来生成可执行自动化流程。
 - 场景组合通过异步启动接口创建 run，并通过 SSE 事件驱动真实节点状态和连线动画；运行详情接口负责最终数据校准。
+- 场景版本以 `nodes[]` 保存测试用例节点；每个节点拥有有序 `before_actions[]`、唯一 `test_case` 和有序 `after_actions[]`。执行器按节点隔离动作作用域，前置或测试用例失败仍进入本节点后置动作并逐项尝试清理。新契约不读取旧 `steps/execution_phase`，存量数据通过发布前迁移处理。
 - 场景数据驱动以测试记录为最小运行单元；每条启用记录创建带 `record_id`、`record_name` 的独立 run，前端按 `run_id` 隔离实时状态并允许切换当前画布观察对象。
 - 数据集只负责组织共享变量和多条记录，请求覆盖不修改原始接口定义。
 - 执行中心产出执行记录。
 - 测试报告基于执行记录生成。
-- 缺陷跟踪按项目记录 Bug，可由报告分析入口创建，也可在缺陷模块中独立维护；状态流转由后端校验。
+- 缺陷跟踪按项目记录 Bug，可由报告分析入口创建，也可在缺陷模块中独立维护；状态流转由后端校验。图片作为独立媒体对象绑定，不把会过期的预签名 URL 持久化到富文本。
 
 ## 前端路由和权限预期
 
@@ -334,6 +336,7 @@ flowchart LR
 | `/api` | 接口测试用例 | 是 | `api_case:view`、`api_case:create`、`api_case:update`、`api_case:delete`、`api_case:reference` |
 | `/executions` | 执行中心 | 是 | `execution:view`、`execution:start`、`execution:stop` |
 | `/defects` | 缺陷跟踪 | 是 | `defect:view`、`defect:create`、`defect:update`、`defect:delete`、`defect:transition` |
+| `/defects/{defect_id}` | 缺陷详情 | 是 | `defect:view`；编辑、删除和流转按对应权限控制 |
 | `/reports` | 测试报告 | 是 | `report:view`、`report:create_defect` |
 | `/environments` | 环境配置 | 是 | `environment:view`、`environment:update` |
 | `/settings` | 系统设置 | 是 | `system:manage` |
@@ -421,4 +424,6 @@ flowchart LR
 | 2026-06-15 | 数据驱动升级为数据集内多条完整测试记录，支持结构化请求字段和深层 JSON Body 覆盖 | 场景组合、接口契约 |
 | 2026-06-15 | 多数据集和多测试记录执行按 run 隔离实时进度，画布支持切换观察对象并在运行历史保留记录身份 | 场景组合、执行架构 |
 | 2026-06-15 | 建立 AI 开发入口、文档治理规范和自动文档检查 | 全局、文档工程 |
-| 2026-06-17 | 新增缺陷跟踪模块，支持 Bug 记录、富文本内容和状态流转 | 缺陷跟踪、接口契约 |
+| 2026-06-17 | 新增缺陷跟踪模块，支持 Bug 记录、富文本内容、独立图片附件和状态流转 | 缺陷跟踪、媒体存储、接口契约 |
+| 2026-06-17 | 缺陷列表改为摘要视图，状态操作收纳到三点菜单，编辑和删除迁移到独立详情路由 | 缺陷跟踪、应用路由 |
+| 2026-06-17 | 场景组合新增前置、主流程、后置步骤阶段及失败后持续清理语义 | 场景组合、执行架构、接口契约 |

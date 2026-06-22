@@ -1,7 +1,7 @@
 # 场景组合接口
 
-状态：当前接口与目标执行契约
-最后核验：2026-06-15
+状态：破坏性目标契约（前端已切换，后端需同步实现）
+最后核验：2026-06-19
 
 场景将 HTTP/WebSocket 基础用例、等待和条件步骤编排为可版本化的业务流程。基础路径为
 `/api/v1`，接口使用 Bearer Token，成功响应统一为 `{code, message, data}`。
@@ -27,16 +27,19 @@
   "name": "登录下单",
   "environmentId": 1,
   "tags": ["P0"],
-  "steps": [
+  "nodes": [
     {
-      "id": "STEP-1",
-      "kind": "api_case",
-      "referenceId": 11,
       "name": "登录",
-      "method": "POST",
-      "path": "/login",
-      "configText": "{}",
-      "continueOnFailure": false
+      "id": "NODE-1",
+      "before_actions": [
+        { "id": "ACTION-1", "kind": "random", "name": "生成订单号", "config": { "type": "uuid", "output": "orderNo" }, "continue_on_failure": false }
+      ],
+      "test_case": {
+        "id": "STEP-1", "kind": "api_case", "reference_id": 11, "name": "登录", "method": "POST", "path": "/login", "config": {}, "continue_on_failure": false
+      },
+      "after_actions": [
+        { "id": "ACTION-2", "kind": "script", "name": "清理登录态", "config": { "language": "python", "code": "result = {}", "inputs": ["token"], "outputs": ["result"], "timeout_ms": 10000 }, "continue_on_failure": true }
+      ]
     }
   ],
   "datasets": [
@@ -67,13 +70,26 @@
 }
 ```
 
+### 测试用例节点与绑定动作
+
+场景的基本编排单位改为 `nodes[]`。每个节点必须有且只有一个 `test_case`，并可包含有序的 `before_actions[]` 和 `after_actions[]`。动作的位置由容器表达，不再提交 `steps` 或 `execution_phase`。
+
+- 执行顺序为节点顺序；单节点内部固定为 `before_actions -> test_case -> after_actions`。
+- 前置动作失败且 `continue_on_failure=false` 时跳过该节点剩余前置动作和 `test_case`，但仍进入该节点后置动作。
+- 测试用例失败后仍执行本节点全部后置动作；单个后置动作失败不阻止其余后置动作。
+- 动作仅能读取执行到当前位置时可见的场景变量，并通过 `config.output` 或 `config.outputs` 声明写入变量；JSON 值保留原始类型。
+- `kind` 第一批为 `api_case`、`websocket_case`、`condition`、`delay`、`random`、`fixed_value`、`script`。主 `test_case` 只允许前两类；其余类型用于前置或后置动作。
+- `script` 必须在后端受限沙箱执行，使用语言白名单、超时、资源限额和输入/输出变量白名单，禁止文件、进程和默认网络访问。
+
+这是破坏性升级：后端不读取旧 `steps/execution_phase`，前端也不发送旧结构。已有场景必须在发布前通过一次性迁移转换为 `nodes`，无法可靠迁移的数据应阻止上线或明确清理，不能在运行时双写或猜测。
+
 更新请求必须携带当前 `version`。版本冲突返回 HTTP `409` 和 `current_version`。
 每次更新生成不可变的 `test_scenario_versions` 记录。场景版本保存基础用例执行快照，
 后续修改基础用例不会改变旧版本。
 
-### 条件与等待步骤配置
+### 内置动作配置
 
-条件和等待步骤继续复用 `steps[].config` 对象，不要求后端新增字段。前端提供结构化表单，
+所有动作使用各自的 `config` 对象。前端提供结构化表单，
 保存时转换为以下执行配置：
 
 ```json
@@ -89,12 +105,22 @@
     "config": {
       "duration_ms": 5000
     }
+  },
+  { "kind": "random", "config": { "type": "integer", "min": 1, "max": 100, "output": "randomValue" } },
+  { "kind": "fixed_value", "config": { "output": "enabled", "value": true } },
+  { "kind": "script", "config": { "language": "javascript", "code": "result = { ok: true };", "inputs": ["token"], "outputs": ["result"], "timeout_ms": 10000 } }
   }
 ]
 ```
 
 - `condition.expression` 是执行器最终使用的表达式。前端常用表单支持变量、`==`、`!=`、`>`、`>=`、`<`、`<=`、文本、数字、布尔值和空值。
 - `delay.duration_ms` 是非负整数毫秒。前端允许用户按毫秒、秒或分钟输入并统一换算。
+- `random.type` 支持 `integer`、`string`、`uuid`；整数校验 `min <= max`，字符串长度必须为正整数。
+- `fixed_value.value` 接受任意 JSON 值并保留类型，`output` 必须是合法变量名。
+- `script.language` 支持 `python`、`javascript`；JavaScript 运行要求服务器安装 Node.js。`code` 最大 `100 KB`，输入和输出数据分别最大 `1 MB`，`timeout_ms` 是 `1～60000` 的整数，输入和输出名称必须是对应语言的合法变量名。
+- `script.inputs[]` 中的每个变量必须在当前执行位置由前置节点提供；任一输入不可用时不执行脚本并返回 `Script inputs are unavailable`。脚本在顶层执行，不能使用顶层 `return`，而是直接给 `script.outputs[]` 声明的变量赋值；未赋值的输出为 `null`，输出值必须可转换为 JSON。
+- Python 支持变量赋值、`if/else`、`for/while`、列表/字典/元组、数值和字符串运算、下标、比较和布尔运算，以及 `abs`、`bool`、`dict`、`enumerate`、`float`、`int`、`len`、`list`、`max`、`min`、`range`、`round`、`sorted`、`str`、`sum`、`tuple`、`zip`。禁止 `import`、函数/类、`lambda`、属性访问、文件/网络/数据库、第三方库、`print`、`try/except`、`with`、`raise`、`eval/exec` 和 `__xxx__` 私有名称。
+- JavaScript 同样不能访问 Node.js 模块、文件系统或网络。前端只做即时的常见错误检查，后端必须再次执行完整语法、安全、资源和 JSON 序列化校验。
 - 历史复杂表达式必须原样返回。前端不展示原始 JSON 编辑入口；用户使用结构化表单修改后，配置转换为标准条件表达式。
 - 后端不得依赖前端专用展示字段；步骤名称和 `path` 摘要不参与条件或等待执行。
 
@@ -160,6 +186,8 @@
 只返回数据集名称，否则同一数据集内的不同输入无法精确审计。
 
 事件顺序、重连和详情字段见：
+
+节点内动作事件及运行详情必须返回 `node_id`、`action_id`、`action_position`（`before|main|after`）和 `action_index`；`step_id/step_index` 可继续作为整次运行的扁平定位，但不能代替节点归属字段。
 
 - `../docs/scenario-run-events-contract.md`
 - `../docs/scenario-run-detail-contract.md`

@@ -1,5 +1,19 @@
 import "@testing-library/jest-dom/vitest";
 
+if (!Range.prototype.getClientRects) {
+  Object.defineProperty(Range.prototype, "getClientRects", {
+    configurable: true,
+    value: () => {
+      const rects: DOMRect[] = [];
+      return {
+        length: 0,
+        item: () => null,
+        [Symbol.iterator]: () => rects[Symbol.iterator](),
+      } as DOMRectList;
+    },
+  });
+}
+
 if (typeof localStorage?.getItem !== "function" || typeof localStorage?.clear !== "function") {
   const values = new Map<string, string>();
   const storage: Storage = {

@@ -1,5 +1,5 @@
 ﻿import { useCallback, useEffect, useMemo, useState } from "react";
-import { useRef } from "react";
+import { lazy, Suspense, useRef } from "react";
 import {
   executeUnsavedTestCase,
   executeUnsavedWebSocketTestCase,
@@ -37,6 +37,7 @@ import {
   subscribeScenarioRunEvents,
   type ScenarioDataset,
   type ScenarioDatasetRecord,
+  type ScenarioActionPosition,
   type ScenarioRequestOverride,
   type ScenarioRequestOverrideTarget,
   type ScenarioResolvedBinding,
@@ -55,6 +56,7 @@ import { ConfirmDialog } from "../components/ConfirmDialog";
 import type { ActionHandler } from "../types";
 
 type ScenarioTab = "design" | "data" | "history";
+const ScriptCodeEditor = lazy(() => import("../components/ScriptCodeEditor"));
 type DataNavigationTarget = "fields" | "datasets";
 interface ScenarioLiveProgress {
   currentStepIndex?: number;
@@ -65,6 +67,25 @@ interface ScenarioLiveProgress {
 interface ScenarioConnectionNotice {
   message: string;
   tone: "info" | "warning" | "success";
+}
+
+const scenarioPositionLabels: Record<ScenarioActionPosition, string> = {
+  before: "前置",
+  main: "主测试用例",
+  after: "后置",
+};
+
+const scenarioPositionOrder: Record<ScenarioActionPosition, number> = {
+  before: 0,
+  main: 1,
+  after: 2,
+};
+
+function orderScenarioSteps(steps: ScenarioStep[]) {
+  const nodeOrder = [...new Set(steps.filter((step) => step.actionPosition === "main").map((step) => step.nodeId))];
+  return nodeOrder.flatMap((nodeId) => steps
+    .filter((step) => step.nodeId === nodeId)
+    .sort((left, right) => scenarioPositionOrder[left.actionPosition] - scenarioPositionOrder[right.actionPosition]));
 }
 
 function scenarioRunDataset(
@@ -142,6 +163,9 @@ type ScenarioAsset = Pick<ScenarioStep, "kind" | "referenceId" | "name" | "metho
 const builtInAssets: ScenarioAsset[] = [
   { kind: "condition", name: "条件判断", method: "IF", path: "根据表达式决定是否继续" },
   { kind: "delay", name: "等待事件", method: "WAIT", path: "等待指定时间后继续" },
+  { kind: "random", name: "生成随机值", method: "RNG", path: "生成数字、字符串或 UUID 并写入变量" },
+  { kind: "fixed_value", name: "设置固定值", method: "SET", path: "把 JSON 值写入场景变量" },
+  { kind: "script", name: "执行脚本", method: "CODE", path: "在受限沙箱中运行 Python 或 JavaScript" },
 ];
 
 function unwrapCases(result: unknown): BackendTestCase[] {
@@ -185,17 +209,25 @@ function mapCase(source: BackendTestCase, index: number, kind: ScenarioStepKind)
   };
 }
 
-function stepFromAsset(asset: ScenarioAsset): ScenarioStep {
+function stepFromAsset(asset: ScenarioAsset, nodeId: string, actionPosition: ScenarioActionPosition): ScenarioStep {
   const defaults = asset.kind === "delay"
     ? { duration_ms: 1000 }
     : asset.kind === "condition"
       ? { expression: "{{status}} == 'success'" }
+      : asset.kind === "random"
+        ? { type: "integer", min: 1, max: 100, length: 12, output: "randomValue" }
+        : asset.kind === "fixed_value"
+          ? { output: "value", value: "" }
+          : asset.kind === "script"
+            ? { language: "python", code: "result = None", inputs: [], outputs: ["result"], timeout_ms: 10000 }
       : asset.requestConfig ?? {};
   return {
     ...asset,
     id: scenarioUniqueId("STEP"),
     configText: JSON.stringify(defaults, null, 2),
     continueOnFailure: false,
+    nodeId,
+    actionPosition,
   };
 }
 
@@ -224,6 +256,9 @@ export function ScenariosPage({
   const [tab, setTab] = useState<ScenarioTab>("design");
   const [assets, setAssets] = useState<ScenarioAsset[]>([]);
   const [assetSearch, setAssetSearch] = useState("");
+  const [assetTargetPosition, setAssetTargetPosition] = useState<ScenarioActionPosition>("main");
+  const [assetTargetNodeId, setAssetTargetNodeId] = useState<string>();
+  const [actionPickerOpen, setActionPickerOpen] = useState(false);
   const [scenarioSearch, setScenarioSearch] = useState("");
   const [assetLoading, setAssetLoading] = useState(false);
   const [assetError, setAssetError] = useState("");
@@ -275,6 +310,15 @@ export function ScenariosPage({
   useEffect(() => () => scenarioRunAbortController?.abort(), [scenarioRunAbortController]);
 
   useEffect(() => {
+    if (!actionPickerOpen) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setActionPickerOpen(false);
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [actionPickerOpen]);
+
+  useEffect(() => {
     if (!projectId) {
       setAssets([]);
       setAssetError("");
@@ -301,6 +345,7 @@ export function ScenariosPage({
   }, [projectId]);
 
   const selectedStep = draft?.steps.find((step) => step.id === selectedStepId);
+  const assetTargetNode = draft?.steps.find((step) => step.nodeId === assetTargetNodeId && step.actionPosition === "main");
   const selectedStepAsset = selectedStep
     ? assets.find((asset) => asset.kind === selectedStep.kind && String(asset.referenceId) === String(selectedStep.referenceId))
     : undefined;
@@ -320,39 +365,9 @@ export function ScenariosPage({
   const scenarioPagination = usePagination(filteredScenarios, 6, `${projectId ?? "none"}:${scenarioSearch}`);
   const filteredAssets = [...builtInAssets, ...assets].filter((asset) => !assetSearch.trim()
     || `${asset.name} ${asset.method} ${asset.path}`.toLowerCase().includes(assetSearch.trim().toLowerCase()));
-  const stats = useMemo(() => [
-    { label: "场景数量", value: scenarios.length, icon: "account_tree", tone: "blue" },
-    { label: "编排步骤", value: scenarios.reduce((total, item) => total + item.steps.length, 0), icon: "format_list_numbered", tone: "green" },
-    { label: "数据集", value: scenarios.reduce((total, item) => total + item.datasets.length, 0), icon: "database", tone: "orange" },
-    { label: "调试失败", value: runs.filter((item) => item.status === "failed").length, icon: "error", tone: "red" },
-  ], [runs, scenarios]);
-
-  const navigateFromStat = (label: string) => {
-    if (label === "数据集") {
-      if (!draft) return onAction("请先选择一个场景查看数据集");
-      setSelectedDatasetId(undefined);
-      setTab("data");
-      setDataNavigationTarget("datasets");
-      return;
-    }
-    if (label === "编排步骤") {
-      if (!draft) return onAction("请先选择一个场景查看编排步骤");
-      setSelectedDatasetId(undefined);
-      setTab("design");
-      return;
-    }
-    if (label === "调试失败") {
-      if (!draft) return onAction("请先选择一个场景查看调试记录");
-      setSelectedDatasetId(undefined);
-      setTab("history");
-      return;
-    }
-    const scenarioList = document.querySelector<HTMLElement>(".scenario-list");
-    scenarioList?.scrollIntoView?.({ behavior: "smooth", block: "nearest" });
-    scenarioList?.classList.add("scenario-focus-target");
-    window.setTimeout(() => scenarioList?.classList.remove("scenario-focus-target"), 1200);
-  };
-
+  const pickerAssets = filteredAssets.filter((asset) => assetTargetPosition !== "main" || asset.kind === "api_case" || asset.kind === "websocket_case");
+  const testCaseAssets = assets.filter((asset) => !assetSearch.trim()
+    || `${asset.name} ${asset.method} ${asset.path}`.toLowerCase().includes(assetSearch.trim().toLowerCase()));
   const selectScenario = async (scenario: TestScenario) => {
     if (!projectId) return;
     setBusy(true);
@@ -393,21 +408,47 @@ export function ScenariosPage({
   const patchDraft = (patch: Partial<TestScenario>) => setDraft((current) => current ? { ...current, ...patch } : current);
   const patchStep = (patch: Partial<ScenarioStep>) => {
     if (!draft || !selectedStepId) return;
-    patchDraft({ steps: draft.steps.map((step) => step.id === selectedStepId ? { ...step, ...patch } : step) });
+    const steps = draft.steps.map((step) => step.id === selectedStepId ? { ...step, ...patch } : step);
+    patchDraft({ steps: patch.actionPosition ? orderScenarioSteps(steps) : steps });
   };
 
-  const addStep = (asset: ScenarioAsset) => {
+  const addStep = (asset: ScenarioAsset, position = assetTargetPosition, targetNodeId = assetTargetNodeId) => {
     if (!draft) return onAction("请先新建或选择场景");
-    const step = stepFromAsset(asset);
-    patchDraft({ steps: [...draft.steps, step] });
+    const isTestCase = asset.kind === "api_case" || asset.kind === "websocket_case";
+    if (position === "main" && !isTestCase) return onAction("主流程节点必须绑定 HTTP 或 WebSocket 测试用例");
+    if (position !== "main" && !targetNodeId) return onAction("请从画布中的测试用例添加前置或后置动作");
+    const nodeId = position === "main" ? scenarioUniqueId("NODE") : targetNodeId!;
+    const step = stepFromAsset(asset, nodeId, position);
+    patchDraft({ steps: orderScenarioSteps([...draft.steps, step]) });
     setSelectedStepId(step.id);
-    onAction(`已添加步骤 ${asset.name}`);
+    setAssetTargetPosition(position);
+    setAssetTargetNodeId(nodeId);
+    setActionPickerOpen(false);
+    onAction(`已添加${scenarioPositionLabels[position]}动作 ${asset.name}`);
+  };
+
+  const openActionPicker = (nodeId: string | undefined, position: ScenarioActionPosition) => {
+    setAssetTargetNodeId(nodeId);
+    setAssetTargetPosition(position);
+    setAssetSearch("");
+    setActionPickerOpen(true);
   };
 
   const moveStep = (index: number, direction: -1 | 1) => {
     if (!draft) return;
+    const current = draft.steps[index];
+    if (current.actionPosition === "main") {
+      const nodeIds = draft.steps.filter((step) => step.actionPosition === "main").map((step) => step.nodeId);
+      const nodeIndex = nodeIds.indexOf(current.nodeId);
+      const targetNodeIndex = nodeIndex + direction;
+      if (targetNodeIndex < 0 || targetNodeIndex >= nodeIds.length) return;
+      [nodeIds[nodeIndex], nodeIds[targetNodeIndex]] = [nodeIds[targetNodeIndex], nodeIds[nodeIndex]];
+      patchDraft({ steps: nodeIds.flatMap((nodeId) => draft.steps.filter((step) => step.nodeId === nodeId)) });
+      return;
+    }
     const nextIndex = index + direction;
     if (nextIndex < 0 || nextIndex >= draft.steps.length) return;
+    if (draft.steps[index].nodeId !== draft.steps[nextIndex].nodeId || draft.steps[index].actionPosition !== draft.steps[nextIndex].actionPosition) return;
     const next = [...draft.steps];
     [next[index], next[nextIndex]] = [next[nextIndex], next[index]];
     patchDraft({ steps: next });
@@ -415,7 +456,8 @@ export function ScenariosPage({
 
   const removeStep = (stepId: string) => {
     if (!draft) return;
-    const steps = draft.steps.filter((step) => step.id !== stepId);
+    const removed = draft.steps.find((step) => step.id === stepId);
+    const steps = draft.steps.filter((step) => step.id !== stepId && (removed?.actionPosition !== "main" || step.nodeId !== removed.nodeId));
     patchDraft({ steps });
     if (selectedStepId === stepId) setSelectedStepId(steps[0]?.id);
   };
@@ -461,6 +503,8 @@ export function ScenariosPage({
     if (!projectId || !draft) return;
     if (!draft.name.trim()) return onAction("请输入场景名称");
     if (draft.steps.length === 0) return onAction("请至少添加一个场景步骤");
+    if (!draft.steps.some((step) => step.actionPosition === "main")) return onAction("请至少添加一个主测试用例节点");
+    if (draft.steps.some((step) => step.actionPosition === "main" && step.kind !== "api_case" && step.kind !== "websocket_case")) return onAction("主流程节点只能绑定 HTTP 或 WebSocket 测试用例");
     if (!draft.environmentId) return onAction("请选择执行环境");
     for (const step of draft.steps) {
       try {
@@ -470,6 +514,12 @@ export function ScenariosPage({
         setTab("design");
         return onAction(`步骤“${step.name}”配置不是合法 JSON`);
       }
+    }
+    const scriptError = firstScenarioScriptError(draft.steps);
+    if (scriptError) {
+      setSelectedStepId(scriptError.stepId);
+      setTab("design");
+      return onAction(scriptError.message);
     }
     for (const dataset of draft.datasets) {
       try {
@@ -529,6 +579,12 @@ export function ScenariosPage({
     if (!projectId || !draft) return onAction("请先选择场景");
     if (draft.steps.length === 0) return onAction("场景没有可执行步骤");
     if (!draft.environmentId) return onAction("请选择执行环境");
+    const scriptError = firstScenarioScriptError(draft.steps);
+    if (scriptError) {
+      setSelectedStepId(scriptError.stepId);
+      setTab("design");
+      return onAction(scriptError.message);
+    }
     setTab("design");
     setBusy(true);
     setRunningScenario(true);
@@ -717,9 +773,6 @@ export function ScenariosPage({
         </div>
       </div>
 
-      <div className="stats-grid compact-stats">
-        {stats.map((stat) => <button aria-label={`查看${stat.label}`} className={`metric-card metric-card-link tone-${stat.tone}`} key={stat.label} onClick={() => navigateFromStat(stat.label)} type="button"><Icon name={stat.icon} /><div><p>{stat.label}</p><strong>{stat.value}</strong></div><Icon name="arrow_forward" /></button>)}
-      </div>
       {scenarioConnectionNotice && (
         <div className={`scenario-connection-notice ${scenarioConnectionNotice.tone}`} role="status">
           <Icon name={scenarioConnectionNotice.tone === "success" ? "check_circle" : scenarioConnectionNotice.tone === "warning" ? "sync_problem" : "info"} />
@@ -739,17 +792,16 @@ export function ScenariosPage({
             {filteredScenarios.length === 0 && <div className="scenario-empty-mini"><Icon name="account_tree" /><span>{scenarios.length ? "没有匹配场景" : "暂无场景"}</span><button disabled={!projectId} onClick={createScenario} type="button">新建场景</button></div>}
           </div>
           <Pagination compact itemLabel="个场景" onPageChange={scenarioPagination.setPage} onPageSizeChange={scenarioPagination.setPageSize} page={scenarioPagination.page} pageSize={scenarioPagination.pageSize} total={filteredScenarios.length} />
-
-          {tab === "design" && <>
-            <div className="scenario-divider" />
-            <div className="scenario-panel-head"><div><span className="eyebrow">Assets</span><h3>步骤资产</h3></div></div>
-            <label className="scenario-search"><Icon name="search" /><input onChange={(event) => setAssetSearch(event.target.value)} placeholder="搜索用例或组件" value={assetSearch} /></label>
-            {assetError && <p className="scenario-inline-error">{assetError}</p>}
-            <div className="scenario-asset-list">
-              {assetLoading && <p className="scenario-muted">正在加载测试用例...</p>}
-              {filteredAssets.map((asset, index) => <button disabled={!draft} key={`${asset.kind}-${asset.referenceId ?? index}`} onClick={() => addStep(asset)} type="button"><b className={`scenario-method ${asset.kind}`}>{asset.method}</b><span><strong>{asset.name}</strong><small>{asset.path}</small></span><Icon name="add_circle" /></button>)}
-            </div>
-          </>}
+          <div className="scenario-divider" />
+          <div className="scenario-panel-head"><div><span className="eyebrow">Test cases</span><h3>主流程测试用例</h3></div></div>
+          <p className="scenario-asset-hint">从这里添加主测试用例；工具和脚本请在画布用例卡中添加为前置或后置动作。</p>
+          <label className="scenario-search"><Icon name="search" /><input onChange={(event) => setAssetSearch(event.target.value)} placeholder="搜索 HTTP 或 WebSocket 用例" value={assetSearch} /></label>
+          {assetError && <p className="scenario-inline-error">{assetError}</p>}
+          <div className="scenario-asset-list">
+            {assetLoading && <p className="scenario-muted">正在加载测试用例...</p>}
+            {testCaseAssets.map((asset, index) => <button disabled={!draft} key={`${asset.kind}-${asset.referenceId ?? index}`} onClick={() => addStep(asset, "main", undefined)} type="button"><b className={`scenario-method ${asset.kind}`}>{asset.method}</b><span><strong>{asset.name}</strong><small>主测试用例 · {asset.path}</small></span><Icon name="add_circle" /></button>)}
+            {!assetLoading && testCaseAssets.length === 0 && <p className="scenario-muted">没有匹配的测试用例</p>}
+          </div>
         </aside>
 
         <main className="scenario-canvas">
@@ -783,7 +835,7 @@ export function ScenariosPage({
                 })}
               </div>
             </section>}
-            {tab === "design" && <DesignTab debuggingStepId={debuggingStepId} draft={draft} latestRun={displayedDraftRun} liveProgress={runningScenario ? scenarioRunProgress : undefined} moveStep={moveStep} onAddFirst={() => addStep(builtInAssets[1])} onExecute={executeStep} onRemove={removeStep} onSelect={setSelectedStepId} selectedStepId={selectedStepId} stepDebugResults={stepDebugResults} />}
+            {tab === "design" && <DesignTab debuggingStepId={debuggingStepId} draft={draft} latestRun={displayedDraftRun} liveProgress={runningScenario ? scenarioRunProgress : undefined} moveStep={moveStep} onAddAction={openActionPicker} onExecute={executeStep} onRemove={removeStep} onSelect={setSelectedStepId} selectedStepId={selectedStepId} stepDebugResults={stepDebugResults} />}
             {tab === "data" && <DataTab draft={draft} navigationTarget={dataNavigationTarget} onChange={(datasets) => patchDraft({ datasets })} onNavigated={() => setDataNavigationTarget(undefined)} onSelectDataset={setSelectedDatasetId} selectedDatasetId={selectedDatasetId} />}
             {tab === "history" && <HistoryTab deletingRunIds={deletingRunIds} loadingRunIds={loadingRunIds} onDeleteRun={(run) => setPendingDelete({ type: "run", run })} onLoadRun={loadRunDetail} runs={runs.filter((run) => run.scenarioId === draft.id)} scenario={draft} />}
           </>}
@@ -799,6 +851,13 @@ export function ScenariosPage({
                 : <ScenarioInspector draft={draft} environments={environments} onChange={patchDraft} />}
         </aside>
       </div>
+      {actionPickerOpen && <div className="modal-backdrop scenario-action-picker-backdrop" onMouseDown={() => setActionPickerOpen(false)}><section aria-label={`添加${scenarioPositionLabels[assetTargetPosition]}动作`} aria-modal="true" className={`scenario-action-picker ${assetTargetPosition}`} onMouseDown={(event) => event.stopPropagation()} role="dialog">
+        <div className="modal-head"><div><span className="eyebrow">Add {assetTargetPosition} action</span><h3>添加{scenarioPositionLabels[assetTargetPosition]}动作</h3><p>{assetTargetPosition === "main" ? "选择一个测试用例创建新的主流程节点。" : `动作将绑定到测试用例“${assetTargetNode?.name ?? "未选择"}”。`}</p></div><button aria-label="关闭动作选择" className="icon-btn" onClick={() => setActionPickerOpen(false)} type="button"><Icon name="close" /></button></div>
+        <div className={`scenario-action-picker-phase ${assetTargetPosition}`}><Icon name={assetTargetPosition === "before" ? "first_page" : assetTargetPosition === "after" ? "last_page" : "account_tree"} /><span><strong>{scenarioPositionLabels[assetTargetPosition]}动作</strong><small>{assetTargetPosition === "before" ? "准备数据、变量与依赖" : assetTargetPosition === "after" ? "清理数据、恢复环境与收尾处理" : "创建测试用例节点"}</small></span></div>
+        <label className="scenario-search"><Icon name="search" /><input autoFocus onChange={(event) => setAssetSearch(event.target.value)} placeholder={`搜索可添加的${scenarioPositionLabels[assetTargetPosition]}动作`} value={assetSearch} /></label>
+        {assetError && <p className="scenario-inline-error">{assetError}</p>}
+        <div className="scenario-action-picker-list">{assetLoading && <p className="scenario-muted">正在加载测试用例...</p>}{pickerAssets.map((asset, index) => <button key={`${asset.kind}-${asset.referenceId ?? index}`} onClick={() => addStep(asset, assetTargetPosition, assetTargetNodeId)} type="button"><b className={`scenario-method ${asset.kind}`}>{asset.method}</b><span><strong>{asset.name}</strong><small>{asset.referenceId === undefined ? "工具或脚本" : "测试用例"} · {asset.path}</small></span><Icon name="add" /></button>)}{!assetLoading && pickerAssets.length === 0 && <p className="scenario-muted">没有匹配的{scenarioPositionLabels[assetTargetPosition]}动作</p>}</div>
+      </section></div>}
       {pendingDelete && <ConfirmDialog
         busy={pendingDelete.type === "scenario" ? busy : deletingRunIds.has(pendingDelete.run.id)}
         confirmLabel="确认删除"
@@ -969,10 +1028,14 @@ function OutgoingReferences({ links, run, stepDebugResults }: { links: ScenarioB
   </section>;
 }
 
-function DesignTab({ debuggingStepId, draft, latestRun, liveProgress, moveStep, onAddFirst, onExecute, onRemove, onSelect, selectedStepId, stepDebugResults }: { debuggingStepId?: string; draft: TestScenario; latestRun?: ScenarioRun; liveProgress?: ScenarioLiveProgress; moveStep: (index: number, direction: -1 | 1) => void; onAddFirst: () => void; onExecute: (step: ScenarioStep) => void; onRemove: (id: string) => void; onSelect: (id: string) => void; selectedStepId?: string; stepDebugResults: Record<string, ScenarioStepDebugResult> }) {
-  if (draft.steps.length === 0) return <div className="scenario-lane-empty"><Icon name="playlist_add" /><h3>添加第一个执行步骤</h3><p>从左侧资产库选择测试用例，或先加入等待组件开始编排。</p><button className="btn" onClick={onAddFirst} type="button"><Icon name="add" />添加等待步骤</button></div>;
+function DesignTab({ debuggingStepId, draft, latestRun, liveProgress, moveStep, onAddAction, onExecute, onRemove, onSelect, selectedStepId, stepDebugResults }: { debuggingStepId?: string; draft: TestScenario; latestRun?: ScenarioRun; liveProgress?: ScenarioLiveProgress; moveStep: (index: number, direction: -1 | 1) => void; onAddAction: (nodeId: string | undefined, position: ScenarioActionPosition) => void; onExecute: (step: ScenarioStep) => void; onRemove: (id: string) => void; onSelect: (id: string) => void; selectedStepId?: string; stepDebugResults: Record<string, ScenarioStepDebugResult> }) {
   const links = scenarioBindingLinks(draft.steps);
-  return <div className="scenario-step-lane">{draft.steps.map((step, index) => {
+  const mainSteps = draft.steps.filter((step) => step.actionPosition === "main");
+  const renderStep = (step: ScenarioStep) => {
+    const index = draft.steps.findIndex((item) => item.id === step.id);
+    const position = step.actionPosition;
+    const siblings = position === "main" ? mainSteps : draft.steps.filter((item) => item.nodeId === step.nodeId && item.actionPosition === position);
+    const siblingIndex = siblings.findIndex((item) => item.id === step.id);
     const incoming = links.filter((link) => link.targetStep.id === step.id);
     const outgoing = links.filter((link) => link.sourceStep.id === step.id);
     const runResult = latestRun?.stepResults.find((result) => result.stepId === step.id);
@@ -1018,12 +1081,30 @@ function DesignTab({ debuggingStepId, draft, latestRun, liveProgress, moveStep, 
       {!liveProgress && debugResult
         ? <span className={`scenario-step-run-status debug ${debugFailed ? "failed" : debugResult.status.toLowerCase()}`}>单步{debugFailed ? "失败" : debugResult.status.toLowerCase() === "passed" ? "通过" : debugResult.status} · {debugResult.durationMs}ms</span>
         : runResult && <span className={`scenario-step-run-status ${runResult.status}`}>{runResult.status} · {runResult.durationMs}ms</span>}
-      <span className="scenario-step-policy">{step.continueOnFailure ? "失败继续" : "失败停止"}</span>
-      <div className="scenario-step-actions">{step.referenceId !== undefined && <button className={debuggingStepId === step.id ? "run loading" : "run"} disabled={Boolean(debuggingStepId)} onClick={(event) => { event.stopPropagation(); onExecute(step); }} title="单独执行步骤" type="button"><Icon name={debuggingStepId === step.id ? "progress_activity" : "play_arrow"} /></button>}<button disabled={index === 0} onClick={(event) => { event.stopPropagation(); moveStep(index, -1); }} title="上移" type="button"><Icon name="arrow_upward" /></button><button disabled={index === draft.steps.length - 1} onClick={(event) => { event.stopPropagation(); moveStep(index, 1); }} title="下移" type="button"><Icon name="arrow_downward" /></button><button className="danger" onClick={(event) => { event.stopPropagation(); onRemove(step.id); }} title="移除步骤" type="button"><Icon name="delete" /></button></div>
+      <span className={`scenario-step-policy ${position}`}>{scenarioPositionLabels[position]} · {position === "after" ? "始终执行" : step.continueOnFailure ? "失败继续" : "失败停止"}</span>
+      <div className="scenario-step-actions">{step.referenceId !== undefined && <button className={debuggingStepId === step.id ? "run loading" : "run"} disabled={Boolean(debuggingStepId)} onClick={(event) => { event.stopPropagation(); onExecute(step); }} title="单独执行步骤" type="button"><Icon name={debuggingStepId === step.id ? "progress_activity" : "play_arrow"} /></button>}<button disabled={siblingIndex <= 0} onClick={(event) => { event.stopPropagation(); moveStep(index, -1); }} title="上移" type="button"><Icon name="arrow_upward" /></button><button disabled={siblingIndex < 0 || siblingIndex >= siblings.length - 1} onClick={(event) => { event.stopPropagation(); moveStep(index, 1); }} title="下移" type="button"><Icon name="arrow_downward" /></button><button className="danger" onClick={(event) => { event.stopPropagation(); onRemove(step.id); }} title="移除步骤" type="button"><Icon name="delete" /></button></div>
       {(incoming.length > 0 || outgoing.length > 0) && <div className="scenario-step-references"><IncomingReferences links={incoming} run={latestRun} /><OutgoingReferences links={outgoing} run={latestRun} stepDebugResults={stepDebugResults} /></div>}
     </article>
   </div>;
-  })}</div>;
+  };
+  return <div className="scenario-step-lane">
+    {mainSteps.length === 0 && <button className="scenario-phase-empty" onClick={() => onAddAction(undefined, "main")} type="button"><Icon name="add_circle" /><span><strong>尚未添加主测试用例</strong><small>从项目测试用例中选择 API 或 WebSocket 用例</small></span></button>}
+    {mainSteps.map((mainStep, nodeIndex) => {
+      const beforeActions = draft.steps.filter((step) => step.nodeId === mainStep.nodeId && step.actionPosition === "before");
+      const afterActions = draft.steps.filter((step) => step.nodeId === mainStep.nodeId && step.actionPosition === "after");
+      return <section className="scenario-case-node" key={mainStep.nodeId}>
+        <header className="scenario-case-node-head"><span>测试用例节点 {nodeIndex + 1}</span><strong>{mainStep.name}</strong></header>
+        {beforeActions.length > 0 && <div className="scenario-node-actions before">{beforeActions.map(renderStep)}</div>}
+        {renderStep(mainStep)}
+        <div className="scenario-node-action-bar">
+          <button onClick={() => onAddAction(mainStep.nodeId, "before")} type="button"><Icon name="add" />添加前置动作</button>
+          <span>动作仅绑定当前测试用例</span>
+          <button onClick={() => onAddAction(mainStep.nodeId, "after")} type="button"><Icon name="add" />添加后置动作</button>
+        </div>
+        {afterActions.length > 0 && <div className="scenario-node-actions after">{afterActions.map(renderStep)}</div>}
+      </section>;
+    })}
+  </div>;
 }
 
 function parseStepConfig(configText: string) {
@@ -1200,6 +1281,120 @@ function WaitStepEditor({ config, onChange }: { config: Record<string, unknown>;
   );
 }
 
+function RandomStepEditor({ config, onChange }: { config: Record<string, unknown>; onChange: (patch: Record<string, unknown>) => void }) {
+  const type = String(config.type ?? "integer");
+  return <section className="scenario-control-editor random"><header><span className="scenario-control-icon"><Icon name="casino" /></span><div><strong>随机值生成</strong><small>生成值后写入场景变量，供当前节点及后续节点引用。</small></div></header>
+    <div className="scenario-control-grid"><label className="scenario-field">输出变量<input aria-label="随机值输出变量" onChange={(event) => onChange({ output: event.target.value })} value={String(config.output ?? "randomValue")} /></label><label className="scenario-field">值类型<select aria-label="随机值类型" onChange={(event) => onChange({ type: event.target.value })} value={type}><option value="integer">整数</option><option value="string">随机字符串</option><option value="uuid">UUID</option></select></label></div>
+    {type === "integer" && <div className="scenario-control-grid"><label className="scenario-field">最小值<input aria-label="随机数最小值" onChange={(event) => onChange({ min: Number(event.target.value) })} type="number" value={Number(config.min ?? 1)} /></label><label className="scenario-field">最大值<input aria-label="随机数最大值" onChange={(event) => onChange({ max: Number(event.target.value) })} type="number" value={Number(config.max ?? 100)} /></label></div>}
+    {type === "string" && <label className="scenario-field">字符串长度<input aria-label="随机字符串长度" min="1" onChange={(event) => onChange({ length: Number(event.target.value) })} type="number" value={Number(config.length ?? 12)} /></label>}
+  </section>;
+}
+
+function FixedValueStepEditor({ config, onChange }: { config: Record<string, unknown>; onChange: (patch: Record<string, unknown>) => void }) {
+  const serialized = JSON.stringify(config.value ?? "", null, 2);
+  const [text, setText] = useState(serialized);
+  const [invalid, setInvalid] = useState(false);
+  useEffect(() => { setText(serialized); setInvalid(false); }, [serialized]);
+  const updateValue = (value: string) => {
+    setText(value);
+    try { onChange({ value: JSON.parse(value) as unknown }); setInvalid(false); }
+    catch { setInvalid(true); }
+  };
+  return <section className="scenario-control-editor fixed"><header><span className="scenario-control-icon"><Icon name="data_object" /></span><div><strong>固定值写入</strong><small>按 JSON 原始类型保存，不会把数字、布尔值或对象强制转换为字符串。</small></div></header><label className="scenario-field">输出变量<input aria-label="固定值输出变量" onChange={(event) => onChange({ output: event.target.value })} value={String(config.output ?? "value")} /></label><label className="scenario-field">JSON 值<textarea aria-label="固定值 JSON" onChange={(event) => updateValue(event.target.value)} rows={4} value={text} />{invalid && <small className="error">请输入有效 JSON；字符串需要使用双引号。</small>}</label></section>;
+}
+
+const SCRIPT_MAX_BYTES = 100 * 1024;
+const PYTHON_SCRIPT_DEFAULT = "result = None";
+const JAVASCRIPT_SCRIPT_DEFAULT = "let result = null;";
+const PYTHON_SCRIPT_TEMPLATE = "result = None\n\nif companyId != 1:\n    result = {\n        \"success\": True,\n        \"companyId\": companyId\n    }";
+const JAVASCRIPT_SCRIPT_TEMPLATE = "let result = null;\n\nif (companyId !== 1) {\n  result = {\n    success: true,\n    companyId: companyId\n  };\n}";
+const PYTHON_RESERVED_NAMES = new Set(["False", "None", "True", "and", "as", "assert", "async", "await", "break", "class", "continue", "def", "del", "elif", "else", "except", "finally", "for", "from", "global", "if", "import", "in", "is", "lambda", "nonlocal", "not", "or", "pass", "raise", "return", "try", "while", "with", "yield"]);
+const JAVASCRIPT_RESERVED_NAMES = new Set(["await", "break", "case", "catch", "class", "const", "continue", "debugger", "default", "delete", "do", "else", "enum", "export", "extends", "false", "finally", "for", "function", "if", "import", "in", "instanceof", "let", "new", "null", "return", "static", "super", "switch", "this", "throw", "true", "try", "typeof", "var", "void", "while", "with", "yield"]);
+
+function scriptVariableNameIsValid(name: string, language: string) {
+  return language === "javascript"
+    ? /^[$A-Z_a-z][$\w]*$/.test(name) && !JAVASCRIPT_RESERVED_NAMES.has(name)
+    : /^[A-Z_a-z]\w*$/.test(name) && !PYTHON_RESERVED_NAMES.has(name);
+}
+
+function scriptDiagnostics(config: Record<string, unknown>, availableInputs: string[]) {
+  const language = String(config.language ?? "python");
+  const code = String(config.code ?? "");
+  const inputs = Array.isArray(config.inputs) ? config.inputs.map(String) : [];
+  const outputs = Array.isArray(config.outputs) ? config.outputs.map(String) : [];
+  const timeout = Number(config.timeout_ms ?? 10000);
+  const errors: string[] = [];
+  const warnings: string[] = [];
+  const invalidNames = [...inputs, ...outputs].filter((name) => !scriptVariableNameIsValid(name, language));
+  const duplicateNames = [...inputs.filter((name, index) => inputs.indexOf(name) !== index), ...outputs.filter((name, index) => outputs.indexOf(name) !== index)];
+  const unavailableInputs = inputs.filter((name) => !availableInputs.includes(name));
+  if (invalidNames.length) errors.push(`变量名不合法：${[...new Set(invalidNames)].join("、")}`);
+  if (duplicateNames.length) errors.push(`变量名不能重复声明：${[...new Set(duplicateNames)].join("、")}`);
+  if (unavailableInputs.length) errors.push(`输入变量不来自前置节点：${[...new Set(unavailableInputs)].join("、")}；运行时将提示 Script inputs are unavailable`);
+  if (new TextEncoder().encode(code).length > SCRIPT_MAX_BYTES) errors.push("脚本超过后端 100 KB 限制");
+  if (!Number.isInteger(timeout) || timeout < 1 || timeout > 60000) errors.push("超时时间必须是 1～60000 毫秒的整数");
+  if (!outputs.length) warnings.push("建议至少声明一个输出变量；未赋值的已声明输出会返回 null");
+  if (/^\s*return\b/m.test(code)) errors.push("脚本在顶层执行，不能使用 return；请直接给输出变量赋值");
+  if (language === "python") {
+    const forbidden = [
+      [/^\s*(?:from\s+\S+\s+)?import\b/m, "import"], [/^\s*(?:async\s+)?def\b/m, "自定义函数"],
+      [/^\s*class\b/m, "自定义类"], [/\blambda\b/, "lambda"], [/\b(?:try|except|with|raise)\b/, "异常/上下文语句"],
+      [/\b(?:print|eval|exec)\s*\(/, "print/eval/exec"], [/\.[A-Za-z_]\w*/, "属性访问"], [/\b__\w+__\b/, "私有名称"],
+    ] as const;
+    const matches = forbidden.filter(([pattern]) => pattern.test(code)).map(([, label]) => label);
+    if (matches.length) errors.push(`Python 沙箱不支持：${matches.join("、")}`);
+  } else if (/\b(?:require|import|fetch|process|XMLHttpRequest)\b/.test(code)) {
+    errors.push("JavaScript 沙箱不能加载 Node.js 模块，也不能访问文件系统或网络");
+  }
+  return { errors, warnings };
+}
+
+function availableScriptInputsAt(steps: ScenarioStep[], stepIndex: number) {
+  return [...new Set(steps.slice(0, stepIndex).flatMap((sourceStep) => {
+    const sourceConfig = parseStepConfig(sourceStep.configText);
+    return [
+      ...(typeof sourceConfig.output === "string" ? [sourceConfig.output] : []),
+      ...(Array.isArray(sourceConfig.outputs) ? sourceConfig.outputs.map(String) : []),
+      ...readScenarioContext(sourceStep.configText).extractions.map((extraction) => extraction.name).filter(Boolean),
+    ];
+  }).filter(Boolean))];
+}
+
+function firstScenarioScriptError(steps: ScenarioStep[]) {
+  for (let index = 0; index < steps.length; index += 1) {
+    const step = steps[index];
+    if (step.kind !== "script") continue;
+    const firstError = scriptDiagnostics(parseStepConfig(step.configText), availableScriptInputsAt(steps, index)).errors[0];
+    if (firstError) return { stepId: step.id, message: `脚本“${step.name}”：${firstError}` };
+  }
+  return undefined;
+}
+
+function ScriptStepEditor({ availableInputs, config, onChange }: { availableInputs: string[]; config: Record<string, unknown>; onChange: (patch: Record<string, unknown>) => void }) {
+  const list = (value: unknown) => Array.isArray(value) ? value.join(", ") : "";
+  const parseList = (value: string) => value.split(",").map((item) => item.trim()).filter(Boolean);
+  const language = String(config.language ?? "python");
+  const code = String(config.code ?? "");
+  const diagnostics = scriptDiagnostics(config, availableInputs);
+  const selectedInputs = Array.isArray(config.inputs) ? config.inputs.map(String) : [];
+  const outputNames = Array.isArray(config.outputs) ? config.outputs.map(String) : [];
+  const byteLength = new TextEncoder().encode(code).length;
+  const changeLanguage = (nextLanguage: string) => {
+    const isDefault = !code || code === PYTHON_SCRIPT_DEFAULT || code === JAVASCRIPT_SCRIPT_DEFAULT || code === PYTHON_SCRIPT_TEMPLATE || code === JAVASCRIPT_SCRIPT_TEMPLATE;
+    onChange({ language: nextLanguage, ...(isDefault ? { code: nextLanguage === "python" ? PYTHON_SCRIPT_DEFAULT : JAVASCRIPT_SCRIPT_DEFAULT } : {}) });
+  };
+  const toggleInput = (name: string) => onChange({ inputs: selectedInputs.includes(name) ? selectedInputs.filter((input) => input !== name) : [...selectedInputs, name] });
+  return <section className="scenario-control-editor script">
+    <header><span className="scenario-control-icon"><Icon name="code" /></span><div><strong>沙箱脚本</strong><small>输入只能选择前置节点变量；脚本在顶层执行，请直接给输出变量赋值。</small></div></header>
+    <div className="scenario-control-grid"><label className="scenario-field">语言<select aria-label="脚本语言" onChange={(event) => changeLanguage(event.target.value)} value={language}><option value="python">Python</option><option value="javascript">JavaScript</option></select></label><label className="scenario-field">超时（毫秒）<input aria-label="脚本超时" max="60000" min="1" onChange={(event) => onChange({ timeout_ms: Number(event.target.value) })} type="number" value={Number(config.timeout_ms ?? 10000)} /><small>后端允许 1～60000 ms</small></label></div>
+    <div className="scenario-control-grid"><label className="scenario-field">输入变量<input aria-label="脚本输入变量" onChange={(event) => onChange({ inputs: parseList(event.target.value) })} placeholder="从下方前置变量选择" value={list(config.inputs)} /><small>缺少任一输入时脚本不会执行</small></label><label className="scenario-field">输出变量<input aria-label="脚本输出变量" onChange={(event) => onChange({ outputs: parseList(event.target.value) })} placeholder="result" value={list(config.outputs)} /><small>未赋值的输出最终为 null</small></label></div>
+    <div className="scenario-script-inputs"><span>可用前置变量</span>{availableInputs.length ? <div>{availableInputs.map((name) => <button className={selectedInputs.includes(name) ? "selected" : ""} key={name} onClick={() => toggleInput(name)} type="button"><code>{name}</code><Icon name={selectedInputs.includes(name) ? "check" : "add"} /></button>)}</div> : <small>当前节点之前还没有可用输出；请先在前置节点配置响应取值或输出变量。</small>}</div>
+    <label className="scenario-field scenario-script-editor-field"><span>代码</span><div className="scenario-script-editor" data-language={language}><div className="scenario-script-editor-toolbar"><span>{language === "python" ? "Python" : "JavaScript"}</span><small className={byteLength > SCRIPT_MAX_BYTES ? "error" : ""}>{byteLength.toLocaleString()} / {SCRIPT_MAX_BYTES.toLocaleString()} bytes</small></div><Suspense fallback={<div className="scenario-script-editor-loading">正在加载代码编辑器...</div>}><ScriptCodeEditor code={code} inputNames={selectedInputs} language={language} onChange={(value) => onChange({ code: value })} outputNames={outputNames} placeholder={language === "python" ? PYTHON_SCRIPT_TEMPLATE : JAVASCRIPT_SCRIPT_TEMPLATE} /></Suspense></div></label>
+    {(diagnostics.errors.length > 0 || diagnostics.warnings.length > 0) && <div className="scenario-script-diagnostics" aria-live="polite">{diagnostics.errors.map((message) => <p className="error" key={message}><Icon name="error" />{message}</p>)}{diagnostics.warnings.map((message) => <p className="warning" key={message}><Icon name="warning" />{message}</p>)}</div>}
+    <details className="scenario-script-help"><summary>查看沙箱编写规范</summary><div><p><b>输出方式：</b>不要写 <code>return</code>，直接赋值，例如 <code>result = companyId != 1</code>。</p><p><b>Python：</b>支持变量、流程控制、容器、运算、下标和安全内置函数；不支持 import、函数/类、lambda、属性访问、I/O、网络、print、try/with/raise、eval/exec。</p><p><b>容量：</b>脚本 100 KB，输入和输出数据各 1 MB；输出必须能转换为 JSON。</p></div></details>
+  </section>;
+}
+
 function StepInspector({ allSteps, baseRequestConfig, debugResult, debugging, onChange, onExecute, runResult, step }: { allSteps: ScenarioStep[]; baseRequestConfig?: Record<string, unknown>; debugResult?: ScenarioStepDebugResult; debugging: boolean; onChange: (patch: Partial<ScenarioStep>) => void; onExecute: () => void; runResult?: ScenarioStepResult; step: ScenarioStep }) {
   const [responseExpanded, setResponseExpanded] = useState(false);
   const [responseSearch, setResponseSearch] = useState("");
@@ -1209,10 +1404,13 @@ function StepInspector({ allSteps, baseRequestConfig, debugResult, debugging, on
   const requestConfig = { ...(baseRequestConfig ?? {}), ...parseStepConfig(step.configText) };
   const upstreamVariables = allSteps.slice(0, stepIndex).flatMap((sourceStep, index) =>
     readScenarioContext(sourceStep.configText).extractions.map((extraction) => ({ sourceStep, stepNumber: index + 1, extraction })));
+  const availableScriptInputs = availableScriptInputsAt(allSteps, stepIndex);
   useEffect(() => {
+    setResponseExpanded(false);
+    setResponseSearch("");
     if (!debugResult) return setCollapsedPaths(new Set());
     setCollapsedPaths(new Set(debugResult.sources.flatMap((source) => topLevelContainers(source.value, source.messageIndex))));
-  }, [debugResult]);
+  }, [debugResult, step.id]);
   const updateContext = (next: ScenarioContextConfig) => onChange({ configText: writeScenarioContext(step.configText, next) });
   const patchConfig = (patch: Record<string, unknown>) => {
     const next = { ...requestConfig, ...patch };
@@ -1272,15 +1470,26 @@ function StepInspector({ allSteps, baseRequestConfig, debugResult, debugging, on
     });
   };
   const canDebug = step.kind === "api_case" || step.kind === "websocket_case";
-  return <><div className="scenario-inspector-content"><div className="scenario-panel-head"><div><span className="eyebrow">Step config</span><h3>步骤配置</h3></div><span className={`scenario-method ${step.kind}`}>{step.method}</span></div>
-    <label className="scenario-field">步骤名称<input onChange={(event) => onChange({ name: event.target.value })} value={step.name} /></label>
-    {canDebug ? <ScenarioRequestEditor bindings={context.bindings} config={requestConfig} onBind={bindField} onChange={patchConfig} runResult={runResult} step={step} upstreamVariables={upstreamVariables} /> : <label className="scenario-field">路径或说明<input onChange={(event) => onChange({ path: event.target.value })} value={step.path} /></label>}
+  const anchor = allSteps.find((item) => item.nodeId === step.nodeId && item.actionPosition === "main");
+  return <><div className="scenario-inspector-content"><div className="scenario-panel-head"><div><span className="eyebrow">Action config</span><h3>执行动作配置</h3></div><div className="scenario-inspector-head-actions">{canDebug && <button aria-label="执行步骤" className={debugging ? "scenario-inspector-run loading" : "scenario-inspector-run"} disabled={debugging} onClick={onExecute} type="button"><Icon name={debugging ? "progress_activity" : "play_arrow"} />{debugging ? "执行中" : "执行步骤"}</button>}<span className={`scenario-method ${step.kind}`}>{step.method}</span></div></div>
+    <label className="scenario-field">动作名称<input onChange={(event) => onChange({ name: event.target.value })} value={step.name} /></label>
+    <div className="scenario-action-placement"><span>{scenarioPositionLabels[step.actionPosition]}</span><strong>{anchor?.name ?? step.name}</strong><small>{step.actionPosition === "main" ? "主流程节点只承载一个项目测试用例。" : `该动作只绑定到“${anchor?.name ?? "当前测试用例"}”，不会作为场景全局动作执行。`}</small></div>
+    {canDebug ? <ScenarioRequestEditor bindings={context.bindings} config={requestConfig} key={`request-${step.id}`} onBind={bindField} onChange={patchConfig} runResult={runResult} step={step} upstreamVariables={upstreamVariables} /> : <label className="scenario-field">路径或说明<input onChange={(event) => onChange({ path: event.target.value })} value={step.path} /></label>}
     {step.kind === "condition" && <ConditionStepEditor config={requestConfig} onChange={patchConfig} upstreamVariables={upstreamVariables} />}
     {step.kind === "delay" && <WaitStepEditor config={requestConfig} onChange={patchConfig} />}
-    {canDebug && <ScenarioAssertionEditor assertions={Array.isArray(requestConfig.assertions) ? requestConfig.assertions as ScenarioAssertion[] : []} key={step.id} kind={step.kind} onChange={(assertions) => patchConfig({ assertions })} />}
-    {canDebug && <section className="scenario-debug-section"><header><div><strong>单步调试响应</strong><small>执行后点击响应字段，可直接设为场景变量</small></div><button className={debugging ? "loading" : ""} disabled={debugging} onClick={onExecute} type="button"><Icon name={debugging ? "progress_activity" : "play_arrow"} />{debugging ? "执行中" : "执行步骤"}</button></header>
-      {!debugResult && <p>尚未执行当前步骤。</p>}
-      {debugResult && <div className="scenario-debug-result"><div className="scenario-debug-toolbar"><DebugMeta result={debugResult} /><div className="scenario-debug-toolbar-actions"><button onClick={() => setResponseExpanded(true)} type="button"><Icon name="open_in_full" />展开响应</button></div></div><ResponseContent collapsedPaths={collapsedPaths} onAssert={addAssertion} onCollapsedPathsChange={setCollapsedPaths} onExtract={addExtraction} result={debugResult} /></div>}
+    {step.kind === "random" && <RandomStepEditor config={requestConfig} onChange={patchConfig} />}
+    {step.kind === "fixed_value" && <FixedValueStepEditor config={requestConfig} onChange={patchConfig} />}
+    {step.kind === "script" && <ScriptStepEditor availableInputs={availableScriptInputs} config={requestConfig} onChange={patchConfig} />}
+    {canDebug && <ScenarioAssertionEditor assertions={Array.isArray(requestConfig.assertions) ? requestConfig.assertions as ScenarioAssertion[] : []} key={`assertion-${step.id}`} kind={step.kind} onChange={(assertions) => patchConfig({ assertions })} />}
+    {debugResult && <section className={`scenario-debug-response-card ${debugResult.status.toLowerCase()}`}>
+      <header><div><strong>响应信息</strong><small>本次单步执行结果，点击展开查看完整字段</small></div><span>{debugResult.status}</span></header>
+      <button aria-label="展开响应信息" onClick={() => setResponseExpanded(true)} type="button">
+        <span><Icon name="speed" /><small>耗时</small><strong>{debugResult.durationMs} ms</strong></span>
+        <span><Icon name="http" /><small>状态码</small><strong>{debugResult.statusCode ?? "-"}</strong></span>
+        <span><Icon name="data_object" /><small>响应数据</small><strong>{debugResult.sources.length ? `${debugResult.sources.length} 组` : "无结构化数据"}</strong></span>
+        <em><Icon name="open_in_full" />展开</em>
+      </button>
+      {debugResult.errorMessage && <p><Icon name="error" />{debugResult.errorMessage}</p>}
     </section>}
     {canDebug && <section className="scenario-context-section"><header><div><strong>响应取值</strong><small>给响应 JSON 路径命名，供后续步骤直接引用</small></div><button onClick={() => updateContext({ ...context, extractions: [...context.extractions, { id: scenarioUniqueId("VAR"), name: "", path: "" }] })} type="button"><Icon name="add" />新增</button></header>
       {context.extractions.length === 0 && <p>暂未定义响应取值，例如变量名 companyId、路径 data.id。</p>}
@@ -1300,8 +1509,7 @@ function StepInspector({ allSteps, baseRequestConfig, debugResult, debugging, on
       })}
       <p>{context.extractions.length} 取值 · {context.bindings.length} 引用</p>
     </section>}
-    <label className="scenario-check"><input checked={step.continueOnFailure} onChange={(event) => onChange({ continueOnFailure: event.target.checked })} type="checkbox" /><span><strong>失败后继续</strong><small>当前步骤失败时仍执行后续步骤</small></span></label>
-    {step.referenceId !== undefined && <div className="scenario-reference"><Icon name="link" /><span><strong>引用测试用例</strong><small>{step.kind} · {String(step.referenceId)}</small></span></div>}
+    <label className="scenario-check"><input checked={step.actionPosition === "after" || step.continueOnFailure} disabled={step.actionPosition === "after"} onChange={(event) => onChange({ continueOnFailure: event.target.checked })} type="checkbox" /><span><strong>{step.actionPosition === "after" ? "继续执行其余后置动作" : "动作失败后继续"}</strong><small>{step.actionPosition === "after" ? "单个后置动作失败不会阻止当前测试用例的其他收尾动作" : "关闭时中断当前节点后续前置或主测试用例；后置动作仍会执行"}</small></span></label>
   </div>
   {responseExpanded && debugResult && <div className="modal-backdrop scenario-response-backdrop"><section aria-label={`${step.name} 调试响应`} aria-modal="true" className="scenario-response-modal" role="dialog"><div className="modal-head"><div><span className="eyebrow">Step response</span><h3>{step.name}</h3></div><button className="icon-btn" onClick={() => setResponseExpanded(false)} title="关闭响应详情" type="button"><Icon name="close" /></button></div><div className="scenario-response-search"><Icon name="search" /><input aria-label="搜索响应字段" onChange={(event) => setResponseSearch(event.target.value)} value={responseSearch} />{responseSearch && <button onClick={() => setResponseSearch("")} title="清空响应搜索" type="button"><Icon name="close" /></button>}</div><ResponseContent collapsedPaths={collapsedPaths} onAssert={addAssertion} onCollapsedPathsChange={setCollapsedPaths} onExtract={addExtraction} result={debugResult} search={responseSearch} /></section></div>}
   </>;
@@ -1407,18 +1615,18 @@ function KeyValueEditor({ bindings, label, onBind, onChange, options, runResult,
 
 function ScenarioRequestEditor({ bindings, config, onBind, onChange, runResult, step, upstreamVariables }: { bindings: ScenarioBinding[]; config: Record<string, unknown>; onBind: (target: ScenarioBindingTarget, path: string, source: string) => void; onChange: (patch: Record<string, unknown>) => void; runResult?: ScenarioStepResult; step: ScenarioStep; upstreamVariables: UpstreamVariableOption[] }) {
   const [tab, setTab] = useState<"headers" | "query" | "body">("headers");
+  const [expanded, setExpanded] = useState(false);
   const bodyType = String(config.body_type ?? "none");
   const pathBinding = bindings.find((item) => item.target === "path");
-  return <section className="scenario-request-editor"><header><strong>请求配置</strong><small>变量直接在对应字段中引用，运行后展示解析值</small></header><div className="scenario-request-path"><label className="scenario-field">请求路径<input onChange={(event) => onChange({ path: event.target.value })} value={String(config.path ?? step.path)} /></label><VariableSelect binding={pathBinding} label="请求路径引用上游变量" onChange={(source) => onBind("path", "", source)} options={upstreamVariables} runtimeBinding={runResult?.resolvedBindings?.find((item) => item.bindingId === pathBinding?.id)} /></div><div className="scenario-request-tabs"><button className={tab === "headers" ? "active" : ""} onClick={() => setTab("headers")} type="button">Headers <i>{Object.keys(asRecord(config.headers)).length}</i></button><button className={tab === "query" ? "active" : ""} onClick={() => setTab("query")} type="button">Query <i>{Object.keys(asRecord(config.query_params)).length}</i></button><button className={tab === "body" ? "active" : ""} onClick={() => setTab("body")} type="button">Body</button></div>
+  return <section className={expanded ? "scenario-request-editor expanded" : "scenario-request-editor"}><button aria-expanded={expanded} className="scenario-request-toggle" onClick={() => setExpanded((current) => !current)} type="button"><span><strong>请求配置</strong><small>变量直接在对应字段中引用，运行后展示解析值</small></span><span className="scenario-request-summary"><em>{step.method}</em><Icon name="expand_more" /></span></button>{expanded && <div className="scenario-request-content"><div className="scenario-request-path"><label className="scenario-field">请求路径<input onChange={(event) => onChange({ path: event.target.value })} value={String(config.path ?? step.path)} /></label><VariableSelect binding={pathBinding} label="请求路径引用上游变量" onChange={(source) => onBind("path", "", source)} options={upstreamVariables} runtimeBinding={runResult?.resolvedBindings?.find((item) => item.bindingId === pathBinding?.id)} /></div><div className="scenario-request-tabs"><button className={tab === "headers" ? "active" : ""} onClick={() => setTab("headers")} type="button">Headers <i>{Object.keys(asRecord(config.headers)).length}</i></button><button className={tab === "query" ? "active" : ""} onClick={() => setTab("query")} type="button">Query <i>{Object.keys(asRecord(config.query_params)).length}</i></button><button className={tab === "body" ? "active" : ""} onClick={() => setTab("body")} type="button">Body</button></div>
     {tab === "headers" && <KeyValueEditor bindings={bindings} label="请求头" onBind={onBind} onChange={(headers) => onChange({ headers })} options={upstreamVariables} runResult={runResult} target="headers" value={config.headers} />}
     {tab === "query" && <KeyValueEditor bindings={bindings} label="Query 参数" onBind={onBind} onChange={(query_params) => onChange({ query_params })} options={upstreamVariables} runResult={runResult} target="query_params" value={config.query_params} />}
     {tab === "body" && <div className="scenario-request-body"><label>请求体类型<select aria-label="请求体类型" onChange={(event) => onChange({ body_type: event.target.value })} value={bodyType}><option value="none">无请求体</option><option value="json">JSON</option><option value="raw_json">Raw JSON</option><option value="raw_text">Raw Text</option></select></label>{bodyType !== "none" && <label className="scenario-request-json"><span>请求体 JSON</span><textarea aria-label="请求体 JSON" onChange={(event) => { try { onChange({ body: JSON.parse(event.target.value) }); } catch { /* keep editing */ } }} defaultValue={JSON.stringify(config.body, null, 2)} /></label>}{bodyType !== "none" && upstreamVariables.length > 0 && <div className="scenario-body-bindings"><strong>字段引用</strong>{collectLeafPaths(config.body).map((path) => { const binding = bindings.find((item) => item.target === "body" && item.targetPath === path); return <div key={path}><code>{path}</code><VariableSelect binding={binding} label={`请求体 ${path} 引用上游变量`} onChange={(source) => onBind("body", path, source)} options={upstreamVariables} runtimeBinding={runResult?.resolvedBindings?.find((item) => item.bindingId === binding?.id)} /></div>; })}</div>}</div>}
-  </section>;
+  </div>}</section>;
 }
 
 function responseStatePath(path: string, messageIndex?: number) { return `${messageIndex === undefined ? "http" : `message-${messageIndex}`}:${path}`; }
 function topLevelContainers(value: unknown, messageIndex?: number) { return Object.entries(asRecord(value)).filter(([, item]) => item !== null && typeof item === "object").map(([key]) => responseStatePath(key, messageIndex)); }
-function DebugMeta({ result }: { result: ScenarioStepDebugResult }) { return <div className="scenario-debug-meta"><span className={result.status}>{result.status}</span>{result.statusCode !== undefined && <small>HTTP {result.statusCode}</small>}<small>{result.durationMs}ms</small></div>; }
 function formatResponse(value: unknown) { return typeof value === "string" ? value : JSON.stringify(value); }
 function countMatches(value: unknown, search: string): number { if (!search.trim()) return 0; const keyword = search.toLowerCase(); if (!value || typeof value !== "object") return String(value).toLowerCase().includes(keyword) ? 1 : 0; return Object.entries(value as Record<string, unknown>).reduce((sum, [key, item]) => sum + (key.toLowerCase().includes(keyword) ? 1 : countMatches(item, search)), 0); }
 function ResponseContent({ collapsedPaths, onAssert, onCollapsedPathsChange, onExtract, result, search = "" }: { collapsedPaths: Set<string>; onAssert: (path: string, value: unknown, index?: number) => void; onCollapsedPathsChange: (paths: Set<string>) => void; onExtract: (path: string, index?: number) => void; result: ScenarioStepDebugResult; search?: string }) {

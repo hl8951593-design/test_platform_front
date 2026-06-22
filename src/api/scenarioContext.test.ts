@@ -9,6 +9,8 @@ import type { ScenarioStep } from "./scenarios";
 function step(id: string, configText = "{}"): ScenarioStep {
   return {
     id,
+    nodeId: `NODE-${id}`,
+    actionPosition: "main",
     kind: "api_case",
     referenceId: Number(id.replace(/\D/g, "")) || 1,
     name: id,

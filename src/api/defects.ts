@@ -4,6 +4,15 @@ export type DefectStatus = "new" | "active" | "confirmed" | "fixed" | "verified"
 export type DefectType = "functional" | "ui" | "performance" | "security" | "compatibility" | "data" | "other";
 export type DefectUrgency = "low" | "medium" | "high" | "critical";
 
+export interface DefectAttachment {
+  id: number;
+  originalFilename: string;
+  contentType: string;
+  sizeBytes: number;
+  downloadUrl: string;
+  createdAt: string;
+}
+
 export interface Defect {
   id: string;
   projectId: number;
@@ -13,6 +22,7 @@ export interface Defect {
   urgency: DefectUrgency;
   status: DefectStatus;
   contentHtml: string;
+  attachments: DefectAttachment[];
   reporter: string;
   createdAt: string;
   updatedAt: string;
@@ -26,6 +36,7 @@ export interface DefectInput {
   urgency: DefectUrgency;
   status: DefectStatus;
   contentHtml: string;
+  mediaIds?: number[];
 }
 
 type BackendRecord = Record<string, unknown>;
@@ -71,6 +82,18 @@ function asUrgency(value: unknown): DefectUrgency {
   return ["low", "medium", "high", "critical"].includes(normalized) ? normalized as DefectUrgency : "medium";
 }
 
+export function mapDefectAttachment(value: unknown): DefectAttachment {
+  const source = asRecord(value);
+  return {
+    id: Number(source.id ?? 0),
+    originalFilename: String(source.original_filename ?? "image"),
+    contentType: String(source.content_type ?? "application/octet-stream"),
+    sizeBytes: Number(source.size_bytes ?? 0),
+    downloadUrl: String(source.download_url ?? ""),
+    createdAt: String(source.created_at ?? ""),
+  };
+}
+
 export function mapDefect(value: unknown, projectId: number): Defect {
   const source = asRecord(value);
   return {
@@ -82,6 +105,7 @@ export function mapDefect(value: unknown, projectId: number): Defect {
     urgency: asUrgency(source.urgency ?? source.priority),
     status: asDefectStatus(source.status),
     contentHtml: String(source.content_html ?? source.content ?? ""),
+    attachments: Array.isArray(source.attachments) ? source.attachments.map(mapDefectAttachment) : [],
     reporter: String(source.reporter ?? source.reporter_name ?? source.created_by_name ?? "-"),
     createdAt: String(source.created_at ?? ""),
     updatedAt: String(source.updated_at ?? source.created_at ?? ""),
@@ -89,7 +113,7 @@ export function mapDefect(value: unknown, projectId: number): Defect {
 }
 
 function defectPayload(input: DefectInput) {
-  return {
+  const payload: Record<string, unknown> = {
     title: input.title,
     assignee: input.assignee || null,
     bug_type: input.type,
@@ -97,6 +121,8 @@ function defectPayload(input: DefectInput) {
     status: input.status,
     content_html: input.contentHtml,
   };
+  if (input.mediaIds !== undefined) payload.media_ids = input.mediaIds;
+  return payload;
 }
 
 export async function listDefects(
@@ -111,6 +137,11 @@ export async function listDefects(
     page_size: 200,
   })}`);
   return unwrapItems(result).map((item) => mapDefect(item, projectId));
+}
+
+export async function getDefect(projectId: number, defectId: string) {
+  const result = await requestWithAuth<BackendRecord>(`/defects/${defectId}?project_id=${projectId}`);
+  return mapDefect(result, projectId);
 }
 
 export async function saveDefect(projectId: number, input: DefectInput) {
@@ -135,4 +166,23 @@ export async function transitionDefect(projectId: number, defectId: string, stat
 
 export function deleteDefect(projectId: number, defectId: string) {
   return requestWithAuth<unknown>(`/defects/${defectId}?project_id=${projectId}`, { method: "DELETE" });
+}
+
+export async function uploadDefectImage(projectId: number, file: File) {
+  const body = new FormData();
+  body.append("file", file);
+  const result = await requestWithAuth<BackendRecord>(`/media/images?project_id=${projectId}`, {
+    method: "POST",
+    body,
+  });
+  return mapDefectAttachment(result);
+}
+
+export async function refreshDefectImageUrl(projectId: number, mediaId: number) {
+  const result = await requestWithAuth<BackendRecord>(`/media/${mediaId}/url?project_id=${projectId}`);
+  return String(result.url ?? "");
+}
+
+export function deleteDefectImage(projectId: number, mediaId: number) {
+  return requestWithAuth<unknown>(`/media/${mediaId}?project_id=${projectId}`, { method: "DELETE" });
 }

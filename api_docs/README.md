@@ -1,7 +1,7 @@
 # API 文档索引
 
 状态：接口文档入口
-最后核验：2026-06-15
+最后核验：2026-06-17
 
 `api_docs/` 中只有 `api_*.md` 是按模块维护的接口契约。架构参考和开发记录用于解释历史背景，不得覆盖当前接口文档、前端 contract、类型和测试。
 
@@ -19,6 +19,7 @@
 | [api_test_plans.md](api_test_plans.md) | 测试计划、调度和运行历史 |
 | [api_visual_flows.md](api_visual_flows.md) | 可视化流程 |
 | [api_defects.md](api_defects.md) | 缺陷跟踪 |
+| [api_media.md](api_media.md) | 缺陷图片媒体存储 |
 | [api_ai.md](api_ai.md) | AI 数据源 |
 | [visual_flow_schema.json](visual_flow_schema.json) | FlowDefinition JSON Schema |
 

@@ -5,12 +5,13 @@
 ## 开始前必读
 
 1. 阅读 [文档索引](docs/README.md) 和 [文档治理规范](docs/documentation-governance.md)。
-2. 阅读本次改动对应的模块文档；场景相关改动至少阅读：
+2. 涉及页面、组件或视觉交互时，阅读 [前端 UI 风格规范](docs/style.md)。
+3. 阅读本次改动对应的模块文档；场景相关改动至少阅读：
    - [场景组合前端架构](docs/scenario-composer-architecture.md)
    - [数据驱动请求覆盖契约](docs/scenario-data-driven-contract.md)
    - [场景接口契约](api_docs/api_scenarios.md)
-3. 检查 `git status --short`，保留并兼容已有工作区改动。
-4. 先读类型、API 适配层和测试，再决定页面状态与后端字段。
+4. 检查 `git status --short`，保留并兼容已有工作区改动。
+5. 先读类型、API 适配层和测试，再决定页面状态与后端字段。
 
 ## 架构边界
 
@@ -25,6 +26,7 @@
 
 | 变更类型 | 必须同步 |
 | --- | --- |
+| 视觉语言、组件样式、交互反馈 | `docs/style.md`、模块架构文档；行为变化时同步 `docs/frontend-feature-logic.md` |
 | 页面功能、交互、状态优先级 | 模块架构文档、`docs/frontend-feature-logic.md` |
 | TypeScript 数据模型或序列化 | 模块架构文档、对应 contract、API 文档 |
 | 接口路径、字段、状态码、错误语义 | `api_docs/` 对应文档、前端 contract |
@@ -38,4 +40,3 @@
 - 关键业务路径有自动化测试，契约映射有 API 层测试。
 - 运行 `npm run docs:check`、`npm test -- --run` 和 `npm run build`。
 - 文档描述当前实现；尚未完成的设计必须明确标为“目标契约”或写入开发计划，不能写成已完成。
-

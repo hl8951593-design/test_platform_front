@@ -139,9 +139,9 @@ async function refreshAccessToken() {
   return refreshPromise;
 }
 
-function buildJsonHeaders(headers?: HeadersInit, withAuth = false) {
+function buildJsonHeaders(headers?: HeadersInit, withAuth = false, body?: BodyInit | null) {
   const nextHeaders = new Headers(headers);
-  nextHeaders.set("Content-Type", "application/json");
+  if (!(body instanceof FormData)) nextHeaders.set("Content-Type", "application/json");
 
   if (withAuth) {
     const token = localStorage.getItem("access_token");
@@ -163,7 +163,7 @@ function resolveApiUrl(path: string) {
 export async function requestPublic<T>(path: string, init: RequestInit = {}) {
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...init,
-    headers: buildJsonHeaders(init.headers),
+    headers: buildJsonHeaders(init.headers, false, init.body),
   });
 
   return parseJsonResponse<T>(response, "请求失败，请稍后重试");
@@ -175,7 +175,7 @@ export async function requestWithAuth<T>(path: string, init: RequestInit = {}) {
   const send = () =>
     fetch(`${API_BASE_URL}${path}`, {
       ...init,
-      headers: buildJsonHeaders(init.headers, true),
+      headers: buildJsonHeaders(init.headers, true, init.body),
     });
 
   let response = await send();

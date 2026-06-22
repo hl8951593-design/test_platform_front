@@ -1,7 +1,8 @@
 import { EventStreamRequestError, requestEventStreamWithAuth, requestWithAuth } from "./client";
 import { compileScenarioStepConfig } from "./scenarioContext";
 
-export type ScenarioStepKind = "api_case" | "websocket_case" | "delay" | "condition";
+export type ScenarioStepKind = "api_case" | "websocket_case" | "delay" | "condition" | "random" | "fixed_value" | "script";
+export type ScenarioActionPosition = "before" | "main" | "after";
 export type ScenarioRunStatus = "queued" | "running" | "passed" | "failed" | "timeout" | "cancelled";
 export type ScenarioStepStatus = ScenarioRunStatus | "pending" | "skipped";
 
@@ -14,6 +15,8 @@ export interface ScenarioStep {
   path: string;
   configText: string;
   continueOnFailure: boolean;
+  nodeId: string;
+  actionPosition: ScenarioActionPosition;
 }
 
 export interface ScenarioDataset {
@@ -57,6 +60,9 @@ export interface TestScenario {
 
 export interface ScenarioStepResult {
   stepId: string;
+  nodeId?: string;
+  actionPosition?: ScenarioActionPosition;
+  actionIndex?: number;
   name: string;
   kind?: ScenarioStepKind;
   executionId?: string;
@@ -183,6 +189,10 @@ export interface ScenarioRunEvent {
   status?: ScenarioRunStatus | ScenarioStepStatus;
   stepId?: string;
   stepIndex?: number;
+  nodeId?: string;
+  actionId?: string;
+  actionPosition?: ScenarioActionPosition;
+  actionIndex?: number;
   sourceStepId?: string;
   sourceStepIndex?: number;
   targetStepId?: string;
@@ -201,8 +211,10 @@ type PaginatedResult = {
   page_size?: number;
 };
 
+let scenarioIdSequence = 0;
 export function scenarioUniqueId(prefix: string) {
-  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  scenarioIdSequence += 1;
+  return `${prefix}-${Date.now()}-${scenarioIdSequence.toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
 function buildQuery(values: Record<string, string | number | undefined>) {
@@ -231,7 +243,7 @@ function unwrapItems(result: BackendRecord[] | PaginatedResult) {
   return result.items ?? result.records ?? result.data ?? [];
 }
 
-function mapStep(value: unknown, index: number): ScenarioStep {
+function mapStep(value: unknown, index: number, nodeId: string, actionPosition: ScenarioActionPosition): ScenarioStep {
   const source = asRecord(value);
   const config = source.config ?? source.config_text ?? source.configText ?? {};
   return {
@@ -243,7 +255,23 @@ function mapStep(value: unknown, index: number): ScenarioStep {
     path: String(source.path ?? ""),
     configText: typeof config === "string" ? config : JSON.stringify(config, null, 2),
     continueOnFailure: Boolean(source.continue_on_failure ?? source.continueOnFailure),
+    nodeId,
+    actionPosition,
   };
+}
+
+function flattenScenarioNodes(value: unknown) {
+  return asArray(value).flatMap((item, nodeIndex) => {
+    const node = asRecord(item);
+    const nodeId = String(node.id ?? node.node_id ?? `NODE-${nodeIndex + 1}`);
+    const before = asArray(node.before_actions ?? node.beforeActions)
+      .map((action, actionIndex) => mapStep(action, actionIndex, nodeId, "before"));
+    const testCase = node.test_case ?? node.testCase;
+    const main = testCase == null ? [] : [mapStep(testCase, nodeIndex, nodeId, "main")];
+    const after = asArray(node.after_actions ?? node.afterActions)
+      .map((action, actionIndex) => mapStep(action, actionIndex, nodeId, "after"));
+    return [...before, ...main, ...after];
+  });
 }
 
 function mapDataset(value: unknown, index: number): ScenarioDataset {
@@ -309,7 +337,7 @@ function mapScenario(value: unknown, projectId: number): TestScenario {
     description: String(source.description ?? ""),
     environmentId: asOptionalNumber(source.environment_id ?? source.environmentId),
     tags: asArray(source.tags).map(String),
-    steps: asArray(source.steps).map(mapStep),
+    steps: flattenScenarioNodes(source.nodes),
     datasets: asArray(source.datasets).map(mapDataset),
     createdAt: String(source.created_at ?? source.createdAt ?? ""),
     updatedAt: String(source.updated_at ?? source.updatedAt ?? ""),
@@ -367,6 +395,9 @@ function mapStepResult(value: unknown, index: number): ScenarioStepResult {
   });
   return {
     stepId: String(source.step_id ?? source.id ?? `STEP-${index + 1}`),
+    nodeId: source.node_id == null ? undefined : String(source.node_id),
+    actionPosition: source.action_position == null ? undefined : String(source.action_position) as ScenarioActionPosition,
+    actionIndex: asOptionalNumber(source.action_index),
     name: String(source.name ?? source.step_name ?? `步骤 ${index + 1}`),
     kind: source.kind ? String(source.kind) as ScenarioStepKind : undefined,
     executionId: source.execution_id || source.test_case_execution_id || source.websocket_execution_id
@@ -433,20 +464,28 @@ function parseJsonObject(value: string, label: string) {
 }
 
 function scenarioPayload(input: TestScenario) {
+  const serializeAction = (step: ScenarioStep) => ({
+    id: step.id,
+    kind: step.kind,
+    reference_id: step.referenceId === undefined ? null : Number(step.referenceId),
+    name: step.name,
+    method: step.method,
+    path: step.path,
+    config: compileScenarioStepConfig(step, input.steps),
+    continue_on_failure: step.continueOnFailure,
+  });
+  const mainSteps = input.steps.filter((step) => step.actionPosition === "main");
   return {
     name: input.name,
     description: input.description || null,
     environment_id: input.environmentId,
     tags: input.tags,
-    steps: input.steps.map((step) => ({
-      id: step.id,
-      kind: step.kind,
-      reference_id: step.referenceId === undefined ? null : Number(step.referenceId),
+    nodes: mainSteps.map((step) => ({
+      id: step.nodeId,
       name: step.name,
-      method: step.method,
-      path: step.path,
-      config: compileScenarioStepConfig(step, input.steps),
-      continue_on_failure: step.continueOnFailure,
+      before_actions: input.steps.filter((action) => action.nodeId === step.nodeId && action.actionPosition === "before").map(serializeAction),
+      test_case: serializeAction(step),
+      after_actions: input.steps.filter((action) => action.nodeId === step.nodeId && action.actionPosition === "after").map(serializeAction),
     })),
     datasets: input.datasets.map((dataset) => ({
       id: dataset.id,
@@ -528,12 +567,13 @@ export function saveScenario(projectId: number, input: TestScenario) {
 }
 
 export function duplicateScenario(projectId: number, source: TestScenario) {
+  const nodeIds = new Map(source.steps.filter((step) => step.actionPosition === "main").map((step) => [step.nodeId, scenarioUniqueId("NODE")]));
   return createScenario(projectId, {
     ...source,
     id: "",
     version: 0,
     name: `${source.name} - 副本`,
-    steps: source.steps.map((step) => ({ ...step, id: scenarioUniqueId("STEP") })),
+    steps: source.steps.map((step) => ({ ...step, id: scenarioUniqueId("STEP"), nodeId: nodeIds.get(step.nodeId) ?? scenarioUniqueId("NODE") })),
     datasets: source.datasets.map((dataset) => ({ ...dataset, id: scenarioUniqueId("DATA") })),
     createdAt: "",
     updatedAt: "",
@@ -611,6 +651,10 @@ function mapScenarioRunEvent(value: unknown, eventName?: string, eventId?: strin
     status: source.status ? String(source.status) as ScenarioRunStatus | ScenarioStepStatus : undefined,
     stepId: source.step_id === undefined ? undefined : String(source.step_id),
     stepIndex: asOptionalNumber(source.step_index),
+    nodeId: source.node_id === undefined ? undefined : String(source.node_id),
+    actionId: source.action_id === undefined ? undefined : String(source.action_id),
+    actionPosition: source.action_position === undefined ? undefined : String(source.action_position) as ScenarioActionPosition,
+    actionIndex: asOptionalNumber(source.action_index),
     sourceStepId: source.source_step_id === undefined ? undefined : String(source.source_step_id),
     sourceStepIndex: asOptionalNumber(source.source_step_index),
     targetStepId: source.target_step_id === undefined ? undefined : String(source.target_step_id),
