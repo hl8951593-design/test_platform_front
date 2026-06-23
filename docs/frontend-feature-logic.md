@@ -157,13 +157,27 @@ Authorization: Bearer {{access_token}}
 
 页面入口为 `/scenarios`，主文件为 `src/pages/ScenariosPage.tsx`，前端数据边界封装在 `src/api/scenarios.ts`。
 
-当前支持按项目新建、编辑、复制和软删除场景；引用 HTTP 与 WebSocket 测试用例；加入条件和等待步骤；调整步骤顺序与失败策略；维护请求数据驱动、步骤断言、响应取值和上下游变量绑定；执行单步骤调试并查看结构化响应。
+当前支持按项目新建、编辑、复制和软删除场景；引用 HTTP 与 WebSocket 测试用例；通过 AI 智能组合生成场景草稿；加入条件和等待步骤；调整步骤顺序与失败策略；维护请求数据驱动、步骤断言、响应取值和上下游变量绑定；执行单步骤调试并查看结构化响应。
+
+顶部“AI 组合”按钮调用：
+
+```http
+POST /ai/skills/scenario-composer/runs
+GET /ai/skill-runs/{run_id}/events
+GET /ai/skill-runs/{run_id}
+```
+
+请求体固定使用 `operation=compose`，并提交 `project_id`、`environment_id` 与 `input`。`input` 包含自然语言 `requirement`、可选 `scenario_name`、候选 `http_test_case_ids` / `websocket_test_case_ids`、`include_bindings`、`include_assertions`、`include_hooks`、`include_datasets`、`include_latest_execution`、`execute_candidates` 和 `max_nodes`。`execute_candidates` 默认关闭；开启时页面要求用户勾选二次确认，因为它会真实调用候选用例接口。
+
+候选 HTTP/WebSocket 用例支持多选、分组全选或清空和排序，已选顺序会原样提交给后端作为编排提示。选择器展示最近执行状态、提取器数量和断言数量。创建 AI Skill Run 后，页面用带鉴权 Header 的 `fetch` 消费 SSE：左侧累加 `model.delta` 作为 AI 生成文本，右侧实时展示由 `run.*`、`step.*`、`tool.*` 事件派生的最新工具调用链路，并倒序保留最近事件历史；`heartbeat` 只用于维持连接，不作为业务进度展示。若 SSE 中断，页面查询 run 快照恢复最终 `result` 或 `error_message`。`run.completed` 后前端展示“AI 生成结果预览”，单独列出 `warnings`、场景摘要、节点顺序、前后置动作、主用例 config、提取器、变量绑定和断言；提取器、变量绑定和断言在节点卡片中以结构化短行展示，原始复杂配置保留在可展开的 config 详情中；用户点击“确认保存场景”后才调用 `POST /scenarios?project_id={project_id}` 创建正式场景。
 
 场景画布以测试用例节点为基本单位。左侧只添加 HTTP/WebSocket 主测试用例；每张画布用例卡直接提供前置和后置入口，弹窗明确显示绑定的测试用例。前置、后置动作不会成为场景全局阶段，也不能脱离节点存在。删除主测试用例会连同其绑定动作一起删除。
 
-前后置动作支持执行 HTTP/WebSocket 测试用例、条件判断、等待、随机值、固定 JSON 值和沙箱脚本。随机值可生成整数、字符串或 UUID；固定值保留 JSON 原始类型；脚本声明语言、输入变量、输出变量、代码与超时。脚本区使用 CodeMirror 代码编辑器，提供行号、括号匹配、自动闭合和 Python/JavaScript 语法高亮，并显示 UTF-8 字节计数。自动补全候选限制为当前脚本声明的输入/输出变量、Python 沙箱安全函数和受支持关键字；名称右侧展示“前置节点输入变量”“脚本输出变量”“安全函数”等中文说明，不推荐私有名称、`print` 或其他禁用能力。
+场景响应中的 `environment_name` 会随场景模型保留，用于页面标题、预览和调试记录展示。调试记录自身未返回环境名时，列表标题使用所属场景的 `environment_name` 作为展示兜底，避免已命名环境显示为“未命名环境”。
 
-脚本输入只能引用执行位置之前已声明的响应取值或动作输出，界面提供可用变量快捷选择；缺少任一输入时后端不会执行并提示 `Script inputs are unavailable`。前端在保存和运行前校验变量名、输入可用性、`1～60000 ms` 超时、`100 KB` 代码上限、顶层 `return` 以及明显禁用语法，并在编辑器下方就地展示错误。输出通过直接赋值而不是 `return` 产生，未赋值输出为 `null`，最终值必须能转换为 JSON。后端继续负责完整沙箱语法、输入/输出各 `1 MB`、超时和安全边界校验；JavaScript 执行依赖服务器安装 Node.js。
+前后置动作支持执行 HTTP/WebSocket 测试用例、条件判断、等待、随机值、固定 JSON 值和沙箱脚本。随机值可生成整数、字符串或 UUID；固定值保留 JSON 原始类型；脚本声明语言、输入变量、输出变量、代码与超时。脚本区使用 CodeMirror 代码编辑器，提供行号、括号匹配、自动闭合和 Python/JavaScript 语法高亮，并显示 UTF-8 字节计数。自动补全候选限制为当前脚本声明的输入/输出变量、Python 沙箱安全函数和受支持关键字；名称右侧展示“前置节点输入变量”“脚本输出变量”“安全函数”等中文说明，不推荐私有名称、`print` 或其他禁用能力。脚本动作可从检查器标题栏单独调试，调试输入 JSON 只作为本次执行的 `input_values` 提交，不保存到场景配置。
+
+脚本输入只能引用执行位置之前已声明的响应取值或动作输出，界面提供可用变量快捷选择；缺少任一输入时后端不会执行并提示 `Script inputs are unavailable`。前端在保存和运行前校验变量名、输入可用性、`1～60000 ms` 超时、`100 KB` 代码上限、顶层 `return` 以及明显禁用语法，并在编辑器下方就地展示错误。脚本调试允许用户手工提供输入值验证逻辑，但不会放宽保存和整场运行的变量来源校验。输出通过直接赋值而不是 `return` 产生，未赋值输出为 `null`，最终值必须能转换为 JSON。后端继续负责完整沙箱语法、输入/输出各 `1 MB`、超时和安全边界校验；JavaScript 执行依赖服务器安装 Node.js。
 
 条件和等待步骤不要求用户直接维护 JSON：
 
@@ -186,7 +200,7 @@ Authorization: Bearer {{access_token}}
 
 ### 单步与整场状态
 
-单步调试结果会直接反馈到画布节点：通过为浅绿色，失败、错误、超时或取消为浅红色，并展示“单步失败 · 耗时”。启动整场运行后，SSE 实时状态优先于单步临时状态，避免历史调试颜色覆盖真实执行进度。
+单步调试结果会直接反馈到画布节点：通过为浅绿色，失败、错误、超时或取消为浅红色，并展示“单步失败 · 耗时”。HTTP 和 WebSocket 调试响应在结果卡内直接预览关键响应字段，并可展开完整响应后转为断言或响应取值；脚本调试使用“调试结果”卡直接预览输出变量映射，仅用于查看本次脚本结果，展开入口用于查看完整大数据。启动整场运行后，SSE 实时状态优先于单步临时状态，避免历史调试颜色覆盖真实执行进度。
 
 ### 页面展示原则
 
@@ -416,7 +430,24 @@ POST /test-cases/{testCaseId}/execute?project_id={projectId}&environment_id={env
 
 接口测试用例页提供“AI生成测试用例”按钮。入口要求当前已经选择项目和环境。
 
-前端调用：
+前端优先调用后端 skill runner：
+
+```http
+POST /ai/skills/http-test-case/run
+```
+
+请求体使用 `operation=generate`，并把表单内容放入 `input`：
+
+```json
+{
+  "operation": "generate",
+  "project_id": "{projectId}",
+  "environment_id": "{environmentId}",
+  "input": {}
+}
+```
+
+如果后端部署尚未提供 skill 路由，前端会兼容退回历史接口：
 
 ```http
 POST /ai/test-cases/generate?project_id={projectId}&environment_id={environmentId}
@@ -464,7 +495,25 @@ POST /test-cases?project_id={projectId}
 
 接口测试用例列表的每一行在“运行”按钮旁提供“AI扩展”按钮。该功能只对已经保存、拥有后端 ID 的测试用例生效。
 
-前端调用：
+前端优先调用后端 skill runner：
+
+```http
+POST /ai/skills/http-test-case/run
+```
+
+请求体使用 `operation=expand`，并通过 `source_id` 传入源测试用例 ID：
+
+```json
+{
+  "operation": "expand",
+  "project_id": "{projectId}",
+  "environment_id": "{environmentId}",
+  "source_id": "{testCaseId}",
+  "input": {}
+}
+```
+
+`environment_id` 可选；不传时后端使用源用例默认环境或第一个关联环境。如果后端部署尚未提供 skill 路由，前端会兼容退回历史接口：
 
 ```http
 POST /ai/test-cases/{testCaseId}/expand?project_id={projectId}&environment_id={environmentId}

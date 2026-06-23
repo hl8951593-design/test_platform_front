@@ -1,4 +1,5 @@
 import {
+  composeScenarioWithAi,
   deleteScenarioRun,
   getScenarioRun,
   listScenarios,
@@ -31,6 +32,7 @@ describe("scenarios API", () => {
         version: 3,
         name: "登录下单",
         environment_id: 2,
+        environment_name: "UAT",
         nodes: [{
           id: "NODE-1",
           name: "登录",
@@ -58,6 +60,7 @@ describe("scenarios API", () => {
       id: "11",
       version: 3,
       environmentId: 2,
+      environmentName: "UAT",
       steps: [expect.objectContaining({
         referenceId: 9,
         configText: '{\n  "extract": "token"\n}',
@@ -77,6 +80,89 @@ describe("scenarios API", () => {
             value: "tester",
           }],
         }],
+      })],
+    }));
+  });
+
+  it("composes a scenario draft through the AI scenario-composer skill", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse({
+      project_id: 7,
+      environment_id: 2,
+      environment_name: "UAT",
+      source_summary: "组合登录后查询用户详情",
+      scenario: {
+        name: "用户详情主链路",
+        description: "登录后查询用户详情",
+        environment_id: 2,
+        tags: ["ai-composed"],
+        nodes: [{
+          id: "NODE-1",
+          name: "登录",
+          test_case: {
+            id: "STEP-1",
+            kind: "api_case",
+            reference_id: 1001,
+            name: "登录接口",
+            method: "POST",
+            path: "/login",
+            config: {},
+          },
+          before_actions: [],
+          after_actions: [],
+        }],
+        datasets: [],
+      },
+      warnings: ["请确认 token 绑定"],
+    }));
+
+    const result = await composeScenarioWithAi(7, 2, {
+      requirement: "组合登录后查询用户详情的主链路",
+      scenario_name: "用户详情主链路",
+      http_test_case_ids: [1001],
+      websocket_test_case_ids: [],
+      include_bindings: true,
+      include_assertions: true,
+      include_hooks: true,
+      include_datasets: false,
+      include_latest_execution: true,
+      execute_candidates: false,
+      max_nodes: 10,
+    });
+
+    expect(String(fetchMock.mock.calls[0][0])).toContain("/ai/skills/scenario-composer/run");
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
+      operation: "compose",
+      project_id: 7,
+      environment_id: 2,
+      input: {
+        requirement: "组合登录后查询用户详情的主链路",
+        scenario_name: "用户详情主链路",
+        http_test_case_ids: [1001],
+        websocket_test_case_ids: [],
+        include_bindings: true,
+        include_assertions: true,
+        include_hooks: true,
+        include_datasets: false,
+        include_latest_execution: true,
+        execute_candidates: false,
+        max_nodes: 10,
+      },
+    });
+    expect(result.sourceSummary).toBe("组合登录后查询用户详情");
+    expect(result.environmentName).toBe("UAT");
+    expect(result.warnings).toEqual(["请确认 token 绑定"]);
+    expect(result.scenario).toEqual(expect.objectContaining({
+      id: "",
+      version: 0,
+      projectId: 7,
+      environmentId: 2,
+      name: "用户详情主链路",
+      steps: [expect.objectContaining({
+        id: "STEP-1",
+        kind: "api_case",
+        referenceId: 1001,
+        nodeId: "NODE-1",
+        actionPosition: "main",
       })],
     }));
   });

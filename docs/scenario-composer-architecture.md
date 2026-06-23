@@ -24,19 +24,28 @@
 ```text
 ScenariosPage
   -> src/api/scenarios.ts
+  -> src/api/aiSkillRuns.ts
   -> requestWithAuth / requestEventStreamWithAuth
   -> /api/v1/scenarios
   -> /api/v1/scenario-runs
+  -> /api/v1/ai/skills/scenario-composer/runs
+  -> /api/v1/ai/skill-runs/{run_id}/events
+  -> /api/v1/ai/skill-runs/{run_id}
 ```
 
 - 页面内部使用 camelCase TypeScript 模型。
 - 后端请求和响应使用 snake_case。
 - 场景、版本、运行记录和事件均以后端为权威数据源。
 - 浏览器只保存认证信息，不持久化场景业务数据。
+- AI 智能场景组合只返回草稿，前端不会自动保存；用户确认后仍通过场景创建接口落库。
 
 ## 3. 场景配置
 
 画布以测试用例节点为中心，而不是展示三个全局阶段。每个节点卡片绑定一个 HTTP/WebSocket 测试用例，卡片旁直接提供“添加前置动作”和“添加后置动作”；由此添加的动作只属于当前节点。左侧资产区仅用于添加主测试用例，工具与脚本必须从画布节点进入，避免归属不清。
+
+顶部命令栏提供“AI 组合”入口。用户输入自然语言组合目标，选择执行环境和候选 HTTP/WebSocket 用例后，前端创建 `scenario-composer` 的可观测 AI Skill Run，`operation=compose`。表单支持生成断言、前置/后置动作、变量绑定、数据集、读取最近执行样本，以及危险的实际执行候选用例开关；`execute_candidates` 默认关闭，开启时必须二次确认。候选用例支持多选、HTTP/WebSocket 分组全选或清空、已选顺序排序，并展示最近执行状态、提取器数量和断言数量。
+
+AI Run 创建后，前端订阅 `/ai/skill-runs/{run_id}/events`。弹窗左侧累加 `model.delta` 展示 AI 生成文本，右侧基于 `run.*`、`step.*` 和 `tool.*` 事件实时派生“最新工具调用链路”，高亮当前最新工具调用，并在下方倒序保留最近事件历史；`heartbeat` 不进入业务时间线。SSE 断开时，前端可读取 `/ai/skill-runs/{run_id}` 快照恢复最终 `result` 或 `error_message`。`run.completed` 的 `result.scenario` 只进入“AI 生成结果预览”弹窗，不直接写入当前画布或落库。预览展示场景名称、描述、标签、节点顺序、每个节点的 HTTP/WebSocket 类型、`reference_id`、前置/后置动作、主用例 config、提取器、变量绑定和断言；提取器、绑定和断言优先拆成结构化短行，原始复杂 JSON 保留在可展开 config 详情中。`warnings` 使用黄色警告单独展示。用户确认后，前端调用 `POST /scenarios?project_id={id}` 创建正式场景，再把已保存结果载入画布。
 
 传输契约使用 `nodes[]`，每个节点包含 `before_actions[]`、唯一 `test_case` 和 `after_actions[]`：
 
@@ -47,6 +56,7 @@ ScenariosPage
 - `random`、`fixed_value`、`script` 使用结构化编辑器声明输出变量、值类型或脚本输入输出；脚本使用支持行号、括号匹配、自动闭合与 Python/JavaScript 语法高亮的代码编辑器，不使用普通多行文本框。自动补全仅推荐当前已声明的输入/输出、沙箱允许的 Python 安全函数和受支持的语言关键字，候选项右侧展示中文用途说明，不暴露 `__builtins__` 等后端禁用名称。
 - 脚本输入从当前执行位置之前已经声明的响应取值或动作输出中选择。保存和运行前检查输入可用性、语言对应的变量名、`1～60000 ms` 超时、`100 KB` 代码上限、顶层 `return` 和明显禁用语法；后端仍是完整语法、安全和资源限制的最终校验者。
 - 脚本通过给 `config.outputs[]` 中的变量赋值产生结果，不使用 `return`。未赋值的已声明输出按后端契约为 `null`，输出必须可序列化为 JSON；输入缺失时后端不执行脚本并返回 `Script inputs are unavailable`。
+- 脚本动作也支持单步调试。检查器展示“调试输入 JSON”，用户可为 `inputs[]` 手工提供本次执行值；该输入只随调试请求提交，不保存到场景版本。保存和整场运行仍要求脚本输入来自前置节点变量。
 - 前端只读写新 `nodes` 契约，不兼容旧 `steps/execution_phase`；存量数据由上线前一次性迁移负责。
 
 HTTP 和 WebSocket 步骤使用结构化请求、断言、响应取值和变量绑定编辑器。条件、等待、随机值、固定值和脚本动作均使用专用表单。页面不展示原始步骤 JSON；提交前统一由 API 层把内部 `configText` 转换为对象。
@@ -137,7 +147,7 @@ interface ScenarioDatasetRecord {
 - 选中状态不得覆盖执行状态；失败节点在选中时仍保留红色失败语义。
 - 右侧配置区使用粘性上下文标题和分组卡片，减少连续表单带来的阅读压力。
 - HTTP/WebSocket 动作的“请求配置”默认收起，切换步骤后恢复收起状态；标题保留协议摘要，用户展开后才显示 Path、Header、Query 和 Body 编辑器。
-- 单步骤执行入口位于右侧检查器标题栏；执行完成后在检查器中显示紧凑“响应信息”卡，包含真实状态、耗时、HTTP 状态码和结构化数据数量。用户点击卡片后打开完整响应弹窗，响应字段仍可直接转为断言或取值变量。
+- 单步骤执行入口位于右侧检查器标题栏；执行完成后在检查器中显示紧凑结果卡。HTTP/WebSocket 使用“响应信息”，包含真实状态、耗时、HTTP 状态码、结构化数据数量和前几项响应字段预览；脚本使用“调试结果”，包含耗时、脚本状态、输出变量数量和前几项输出变量预览。用户点击卡片后打开详情弹窗查看完整大数据；只有 HTTP/WebSocket 响应字段可直接转为断言或取值变量。
 - 右侧检查器不展示只读的“引用测试用例”字段；测试用例归属继续由步骤内部 `referenceId` 和 API 契约维护。
 - 步骤断言区域统一命名为“断言”，默认收起，只在标题中展示已配置数量；用户主动展开后才显示新增、编辑和删除控件。
 - 所有 hover、focus 和运行动画必须支持 `prefers-reduced-motion`。
@@ -148,8 +158,15 @@ interface ScenarioDatasetRecord {
 
 - HTTP：`POST /test-cases/execute-unsaved`
 - WebSocket：`POST /websocket-test-cases/execute-unsaved`
+- Script：`POST /scenarios/actions/script/execute-unsaved`
 
-用户从右侧检查器标题栏执行当前步骤。请求期间按钮进入 disabled/loading 状态；响应返回后先更新检查器内的紧凑结果卡，不自动打断当前配置操作。用户点击“展开响应信息”后打开详情弹窗。
+用户从右侧检查器标题栏执行当前步骤。请求期间按钮进入 disabled/loading 状态；结果返回后先更新检查器内的紧凑结果卡并直接展示关键字段预览，不自动打断当前配置操作。用户点击“展开响应信息”或“展开调试结果”后打开详情弹窗查看完整内容。
+
+脚本调试请求提交当前未保存的 `language`、`code`、`inputs[]`、`outputs[]`、`timeout_ms`
+和调试输入 `input_values`。前端会在请求前校验 JSON 输入、语言变量名、超时、代码容量、顶层
+`return` 和明显禁用语法；变量是否来自前置节点只作为保存和整场运行的阻断条件，不阻止用户
+手工提供输入值调试脚本逻辑。脚本调试响应按输出变量映射展示，只用于查看结果，不提供“设为断言”
+或“设为响应取值”的快捷操作。
 
 调试响应由 `normalizeScenarioStepDebug` 统一为：
 

@@ -141,6 +141,114 @@ POST https://api.deepseek.com/chat/completions
 - 根据接口文档批量生成测试用例草稿。
 - 根据测试报告生成摘要。
 
+## AI Skill 调用入口
+
+后端引入 `skill` 作为 AI 能力编排边界。新前端入口优先创建可观测 AI Skill Run，历史同步直连接口保留为兼容入口：
+
+```http
+GET /api/v1/ai/skills
+GET /api/v1/ai/skills/{skill_id}
+POST /api/v1/ai/skills/{skill_id}/runs
+GET /api/v1/ai/skill-runs/{run_id}
+GET /api/v1/ai/skill-runs/{run_id}/events
+POST /api/v1/ai/skills/{skill_id}/run
+```
+
+`/runs` 返回 `run_id`、`skill_id`、`operation` 和 `status`。前端随后使用带 Bearer Header 的 `fetch` 读取 `/events`，不能用原生 `EventSource`，因为事件流需要鉴权。事件包括 `run.queued`、`run.started`、`run.completed`、`run.failed`、`step.started`、`step.completed`、`tool.started`、`tool.completed`、`model.started`、`model.delta`、`model.completed` 和 `heartbeat`。如果 SSE 中断，前端可调用 `GET /ai/skill-runs/{run_id}` 读取 run 快照、事件列表、最终 `result` 和 `error_message`。
+
+HTTP 接口测试用例使用 `skill_id=http-test-case`：
+
+```json
+{
+  "operation": "generate",
+  "project_id": 1,
+  "environment_id": 1,
+  "input": {
+    "interface_text": "POST /finance/api/login ...",
+    "generate_count": 3,
+    "include_assertions": true
+  }
+}
+```
+
+扩写已保存 HTTP 用例时使用同一个 skill，`operation=expand`，并传入源用例 ID：
+
+```json
+{
+  "operation": "expand",
+  "project_id": 1,
+  "environment_id": 1,
+  "source_id": 10,
+  "input": {
+    "requirement": "围绕登录接口扩写边界值和异常场景",
+    "generate_count": 5,
+    "expansion_types": ["empty_value", "invalid_type"],
+    "include_assertions": true
+  }
+}
+```
+
+`environment_id` 在扩写时可选；不传时后端使用源用例的默认环境或第一个关联环境。skill runner 返回结构与历史生成/扩写接口一致，仍为草稿，不直接保存到测试用例表。
+
+智能场景组合使用 `skill_id=scenario-composer`，`operation=compose`：
+
+```http
+POST /api/v1/ai/skills/scenario-composer/runs
+```
+
+```json
+{
+  "operation": "compose",
+  "project_id": 1,
+  "environment_id": 2,
+  "input": {
+    "requirement": "组合登录后查询用户详情的主链路",
+    "scenario_name": "用户详情主链路",
+    "http_test_case_ids": [1001, 1002],
+    "websocket_test_case_ids": [],
+    "include_bindings": true,
+    "include_assertions": true,
+    "include_hooks": true,
+    "include_datasets": false,
+    "include_latest_execution": true,
+    "execute_candidates": false,
+    "max_nodes": 10
+  }
+}
+```
+
+创建 run 返回结构：
+
+```json
+{
+  "run_id": "ai-run-xxx",
+  "skill_id": "scenario-composer",
+  "operation": "compose",
+  "status": "queued"
+}
+```
+
+`run.completed` 的 `payload.result` 结构：
+
+```json
+{
+  "project_id": 1,
+  "environment_id": 2,
+  "source_summary": "组合登录和用户详情查询",
+  "scenario": {
+    "name": "用户详情主链路",
+    "description": "登录后查询用户详情",
+    "environment_id": 2,
+    "tags": ["ai-composed"],
+    "nodes": [],
+    "datasets": []
+  },
+  "warnings": []
+}
+```
+
+`scenario-composer` 只返回 `ScenarioCreateRequest` 兼容草稿，不直接保存；前端在运行中展示 `model.delta` 累加文本和 `tool.*` / `step.*` 执行轨迹，完成后先展示 AI 生成结果预览，用户确认后再调用场景创建接口。`execute_candidates` 默认关闭，开启时前端必须提示真实调用接口的副作用风险并要求二次确认。
+
 ## WebSocket 测试用例 AI 接口
 
 WebSocket 用例使用独立 AI 能力，不复用 HTTP 用例提示词：
@@ -156,7 +264,8 @@ POST /api/v1/ai/websocket-test-cases/{test_case_id}/expand
 
 | 项目 | 内容 |
 | --- | --- |
-| 接口 | `/ai/test-cases/generate?project_id={project_id}&environment_id={environment_id}` |
+| 推荐接口 | `/ai/skills/http-test-case/run`，`operation=generate` |
+| 兼容接口 | `/ai/test-cases/generate?project_id={project_id}&environment_id={environment_id}` |
 | 方法 | `POST` |
 | 认证 | `Authorization: Bearer <access_token>` |
 | 权限 | 管理员、项目创建者，或拥有 `case:manage` 权限的项目成员 |
@@ -252,7 +361,8 @@ POST /api/v1/ai/websocket-test-cases/{test_case_id}/expand
 
 | 项目 | 内容 |
 | --- | --- |
-| 接口 | `/ai/test-cases/{test_case_id}/expand?project_id={project_id}&environment_id={environment_id}` |
+| 推荐接口 | `/ai/skills/http-test-case/run`，`operation=expand`，`source_id={test_case_id}` |
+| 兼容接口 | `/ai/test-cases/{test_case_id}/expand?project_id={project_id}&environment_id={environment_id}` |
 | 方法 | `POST` |
 | 认证 | `Authorization: Bearer <access_token>` |
 | 权限 | 管理员、项目创建者，或拥有 `case:manage` 权限的项目成员 |

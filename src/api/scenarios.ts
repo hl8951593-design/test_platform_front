@@ -50,6 +50,7 @@ export interface TestScenario {
   name: string;
   description: string;
   environmentId?: number;
+  environmentName?: string;
   tags: string[];
   steps: ScenarioStep[];
   datasets: ScenarioDataset[];
@@ -162,6 +163,30 @@ export interface ScenarioRunLaunch {
   status: ScenarioRunStatus;
   createdAt: string;
   runs: ScenarioRunLaunchItem[];
+}
+
+export interface ScenarioComposePayload {
+  requirement: string;
+  scenario_name?: string;
+  http_test_case_ids: number[];
+  websocket_test_case_ids: number[];
+  include_bindings: boolean;
+  include_assertions: boolean;
+  include_hooks: boolean;
+  include_datasets: boolean;
+  include_latest_execution: boolean;
+  execute_candidates: boolean;
+  max_nodes: number;
+  extra_requirements?: string;
+}
+
+export interface ScenarioComposeResult {
+  projectId: number;
+  environmentId: number;
+  environmentName?: string;
+  sourceSummary: string;
+  scenario: TestScenario;
+  warnings: string[];
 }
 
 export type ScenarioRunEventName =
@@ -336,12 +361,37 @@ function mapScenario(value: unknown, projectId: number): TestScenario {
     name: String(source.name ?? "未命名场景"),
     description: String(source.description ?? ""),
     environmentId: asOptionalNumber(source.environment_id ?? source.environmentId),
+    environmentName: source.environment_name === undefined && source.environmentName === undefined
+      ? undefined
+      : String(source.environment_name ?? source.environmentName),
     tags: asArray(source.tags).map(String),
     steps: flattenScenarioNodes(source.nodes),
     datasets: asArray(source.datasets).map(mapDataset),
     createdAt: String(source.created_at ?? source.createdAt ?? ""),
     updatedAt: String(source.updated_at ?? source.updatedAt ?? ""),
     lastRunAt: source.last_run_at ? String(source.last_run_at) : undefined,
+  };
+}
+
+export function mapScenarioComposeResult(value: unknown, projectId: number, environmentId: number): ScenarioComposeResult {
+  const source = asRecord(value);
+  const scenarioSource = asRecord(source.scenario ?? source.scenario_draft ?? source.scenarioDraft ?? source);
+  return {
+    projectId: Number(source.project_id ?? projectId),
+    environmentId: Number(source.environment_id ?? scenarioSource.environment_id ?? environmentId),
+    environmentName: source.environment_name === undefined && source.environmentName === undefined
+      ? undefined
+      : String(source.environment_name ?? source.environmentName),
+    sourceSummary: String(source.source_summary ?? source.sourceSummary ?? ""),
+    scenario: mapScenario({
+      ...scenarioSource,
+      id: "",
+      version: 0,
+      project_id: source.project_id ?? projectId,
+      environment_id: scenarioSource.environment_id ?? source.environment_id ?? environmentId,
+      environment_name: scenarioSource.environment_name ?? source.environment_name ?? source.environmentName,
+    }, projectId),
+    warnings: asArray(source.warnings).map(String),
   };
 }
 
@@ -440,7 +490,7 @@ function mapRun(value: unknown, projectId: number, detailLoaded = false): Scenar
     environmentId: asOptionalNumber(source.environment_id),
     environmentName: source.environment_name ? String(source.environment_name) : undefined,
     datasetId: source.dataset_id == null ? undefined : String(source.dataset_id),
-    datasetName: String(source.dataset_name ?? source.dataset_id ?? "空变量"),
+    datasetName: String(source.dataset_name ?? source.dataset_id ?? "无数据输入"),
     recordId: source.record_id == null ? undefined : String(source.record_id),
     recordName: source.record_name == null ? undefined : String(source.record_name),
     status: String(source.status ?? "running") as ScenarioRunStatus,
@@ -566,6 +616,23 @@ export function saveScenario(projectId: number, input: TestScenario) {
   return input.id ? updateScenario(projectId, input) : createScenario(projectId, input);
 }
 
+export async function composeScenarioWithAi(
+  projectId: number,
+  environmentId: number,
+  payload: ScenarioComposePayload,
+) {
+  const result = await requestWithAuth<BackendRecord>("/ai/skills/scenario-composer/run", {
+    method: "POST",
+    body: JSON.stringify({
+      operation: "compose",
+      project_id: projectId,
+      environment_id: environmentId,
+      input: payload,
+    }),
+  });
+  return mapScenarioComposeResult(result, projectId, environmentId);
+}
+
 export function duplicateScenario(projectId: number, source: TestScenario) {
   const nodeIds = new Map(source.steps.filter((step) => step.actionPosition === "main").map((step) => [step.nodeId, scenarioUniqueId("NODE")]));
   return createScenario(projectId, {
@@ -626,7 +693,7 @@ export async function runScenario(
       return {
         runId,
         datasetId: run.dataset_id == null ? undefined : String(run.dataset_id),
-        datasetName: String(run.dataset_name ?? run.dataset_id ?? "空变量"),
+        datasetName: String(run.dataset_name ?? run.dataset_id ?? "无数据输入"),
         recordId: run.record_id == null ? undefined : String(run.record_id),
         recordName: run.record_name == null ? undefined : String(run.record_name),
         status: String(run.status ?? "queued") as ScenarioRunStatus,

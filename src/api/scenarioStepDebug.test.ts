@@ -1,6 +1,10 @@
-import { extractScenarioDebugValue, normalizeScenarioStepDebug, suggestedVariableName } from "./scenarioStepDebug";
+import { executeUnsavedScenarioScript, extractScenarioDebugValue, normalizeScenarioScriptDebug, normalizeScenarioStepDebug, suggestedVariableName } from "./scenarioStepDebug";
 
 describe("scenario step debug response", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("normalizes an HTTP JSON response for field picking", () => {
     expect(normalizeScenarioStepDebug({
       status: "passed",
@@ -33,6 +37,46 @@ describe("scenario step debug response", () => {
       { messageIndex: 0, value: { event: "ready" } },
       { messageIndex: 1, value: { connection_id: "abc" } },
     ]);
+  });
+
+  it("normalizes script outputs for the shared response viewer", () => {
+    expect(normalizeScenarioScriptDebug({
+      status: "passed",
+      duration_ms: 18,
+      outputs: {
+        result: { ok: true, companyId: 9527 },
+      },
+    })).toEqual({
+      durationMs: 18,
+      errorMessage: "",
+      sources: [{ value: { result: { ok: true, companyId: 9527 } } }],
+      status: "passed",
+    });
+  });
+
+  it("falls back to the legacy script debug route when the scenario namespace route is missing", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 404,
+        json: async () => ({ detail: "Not Found" }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ data: { status: "passed", outputs: { result: true } } }),
+      } as Response);
+
+    await expect(executeUnsavedScenarioScript(7, {
+      code: "result = True",
+      input_values: {},
+      inputs: [],
+      language: "python",
+      outputs: ["result"],
+      timeout_ms: 10000,
+    })).resolves.toEqual({ status: "passed", outputs: { result: true } });
+
+    expect(String(fetchMock.mock.calls[0][0])).toContain("/scenarios/actions/script/execute-unsaved?project_id=7");
+    expect(String(fetchMock.mock.calls[1][0])).toContain("/scenario-actions/script/execute-unsaved?project_id=7");
   });
 
   it("suggests a variable name from a response path", () => {

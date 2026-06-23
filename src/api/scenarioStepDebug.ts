@@ -1,4 +1,5 @@
 import type { BackendTestCase } from "./apiCases";
+import { requestWithAuth } from "./client";
 import type { ScenarioStepKind } from "./scenarios";
 
 export interface ScenarioDebugSource {
@@ -12,6 +13,16 @@ export interface ScenarioStepDebugResult {
   sources: ScenarioDebugSource[];
   status: string;
   statusCode?: string | number;
+}
+
+export interface ScenarioScriptDebugPayload {
+  code: string;
+  environment_id?: number;
+  input_values: Record<string, unknown>;
+  inputs: string[];
+  language: string;
+  outputs: string[];
+  timeout_ms: number;
 }
 
 export interface ScenarioDebugExtraction {
@@ -31,6 +42,28 @@ function parseJsonBody(value: unknown) {
   } catch {
     return undefined;
   }
+}
+
+function buildQuery(params: Record<string, string | number | undefined>) {
+  const query = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined) query.set(key, String(value));
+  });
+  return query.toString();
+}
+
+export function executeUnsavedScenarioScript(projectId: number, payload: ScenarioScriptDebugPayload) {
+  const init = {
+    method: "POST",
+    body: JSON.stringify(payload),
+  };
+  const query = buildQuery({ project_id: projectId });
+  return requestWithAuth<BackendTestCase>(`/scenarios/actions/script/execute-unsaved?${query}`, init)
+    .catch((error) => {
+      const message = error instanceof Error ? error.message : "";
+      if (!/404|not found/i.test(message)) throw error;
+      return requestWithAuth<BackendTestCase>(`/scenario-actions/script/execute-unsaved?${query}`, init);
+    });
 }
 
 export function normalizeScenarioStepDebug(
@@ -62,6 +95,24 @@ export function normalizeScenarioStepDebug(
     statusCode: typeof response.status_code === "string" || typeof response.status_code === "number"
       ? response.status_code
       : undefined,
+  };
+}
+
+export function normalizeScenarioScriptDebug(result: BackendTestCase): ScenarioStepDebugResult {
+  const response = asRecord(result.response_snapshot);
+  const body = parseJsonBody(response.body);
+  const outputs =
+    result.outputs ??
+    result.output_values ??
+    response.outputs ??
+    response.output_values ??
+    response.json ??
+    body;
+  return {
+    durationMs: Number(result.duration_ms ?? 0) || 0,
+    errorMessage: String(result.error_message ?? ""),
+    sources: outputs === undefined || outputs === null ? [] : [{ value: outputs }],
+    status: String(result.status ?? "unknown"),
   };
 }
 

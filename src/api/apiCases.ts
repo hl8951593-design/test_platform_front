@@ -99,6 +99,14 @@ export interface AiTestCaseGenerateResult {
   warnings?: string[];
 }
 
+interface AiSkillRunPayload<TInput> {
+  operation: "generate" | "expand";
+  project_id: number;
+  environment_id?: number;
+  source_id?: number;
+  input: TInput;
+}
+
 export type BackendTestCase = Record<string, unknown>;
 export type ApiResult<T> = T | { items?: T; records?: T; results?: T; data?: T };
 
@@ -186,7 +194,19 @@ export function executeUnsavedTestCase(projectId: number, payload: TestCaseReque
   });
 }
 
-export function generateAiTestCases(projectId: number, environmentId: number, payload: AiTestCaseGeneratePayload) {
+function isAiSkillUnavailable(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  return /(^|\b)(404|not found)(\b|$)|ai\s*skill.*不存在|skill.*不存在|operation.*不存在/i.test(message);
+}
+
+async function runHttpTestCaseSkill<TInput>(payload: AiSkillRunPayload<TInput>) {
+  return requestWithAuth<AiTestCaseGenerateResult>("/ai/skills/http-test-case/run", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+function generateAiTestCasesLegacy(projectId: number, environmentId: number, payload: AiTestCaseGeneratePayload) {
   return requestWithAuth<AiTestCaseGenerateResult>(
     `/ai/test-cases/generate?${buildQuery({ project_id: projectId, environment_id: environmentId })}`,
     {
@@ -196,7 +216,7 @@ export function generateAiTestCases(projectId: number, environmentId: number, pa
   );
 }
 
-export function expandAiTestCase(
+function expandAiTestCaseLegacy(
   projectId: number,
   testCaseId: string | number,
   payload: AiTestCaseExpandPayload,
@@ -209,6 +229,43 @@ export function expandAiTestCase(
       body: JSON.stringify(payload),
     },
   );
+}
+
+export async function generateAiTestCases(projectId: number, environmentId: number, payload: AiTestCaseGeneratePayload) {
+  try {
+    return await runHttpTestCaseSkill({
+      operation: "generate",
+      project_id: projectId,
+      environment_id: environmentId,
+      input: payload,
+    });
+  } catch (error) {
+    if (!isAiSkillUnavailable(error)) throw error;
+    return generateAiTestCasesLegacy(projectId, environmentId, payload);
+  }
+}
+
+export async function expandAiTestCase(
+  projectId: number,
+  testCaseId: string | number,
+  payload: AiTestCaseExpandPayload,
+  environmentId?: number,
+) {
+  const sourceId = typeof testCaseId === "number" ? testCaseId : Number(testCaseId);
+  if (!Number.isFinite(sourceId)) return expandAiTestCaseLegacy(projectId, testCaseId, payload, environmentId);
+
+  try {
+    return await runHttpTestCaseSkill({
+      operation: "expand",
+      project_id: projectId,
+      environment_id: environmentId,
+      source_id: sourceId,
+      input: payload,
+    });
+  } catch (error) {
+    if (!isAiSkillUnavailable(error)) throw error;
+    return expandAiTestCaseLegacy(projectId, testCaseId, payload, environmentId);
+  }
 }
 
 export function createWebSocketTestCase(projectId: number, payload: WebSocketTestCaseSavePayload) {

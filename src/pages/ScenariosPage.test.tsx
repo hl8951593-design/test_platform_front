@@ -4,6 +4,7 @@ import { ScenariosPage } from "./ScenariosPage";
 const api = vi.hoisted(() => {
   const scenariosByProject = new Map<number, any[]>();
   const runsByProject = new Map<number, any[]>();
+  let lastAiRunPayload: any;
   const editorScenario = (scenario: any) => scenario && ({ ...scenario, steps: scenario.steps.map((step: any) => ({ nodeId: step.nodeId ?? `NODE-${step.id}`, actionPosition: step.actionPosition ?? "main", ...step })) });
   const save = async (projectId: number, input: any) => {
     const existing = (scenariosByProject.get(projectId) ?? []).find((item) => item.id === input.id);
@@ -21,6 +22,130 @@ const api = vi.hoisted(() => {
   return {
     scenariosByProject,
     runsByProject,
+    resetAiRunPayload: () => {
+      lastAiRunPayload = undefined;
+    },
+    composeScenarioWithAi: vi.fn(async (_projectId: number, environmentId: number, payload: any) => ({
+      projectId: _projectId,
+      environmentId,
+      sourceSummary: "组合登录后查询用户详情",
+      scenario: {
+        id: "",
+        projectId: _projectId,
+        version: 0,
+        name: payload.scenario_name || "AI 组合场景",
+        description: payload.requirement,
+        environmentId,
+        tags: ["ai-composed"],
+        datasets: [],
+        createdAt: "",
+        updatedAt: "",
+        steps: [{
+          id: "AI-STEP-1",
+          kind: "api_case",
+          referenceId: payload.http_test_case_ids[0],
+          name: "登录接口",
+          method: "POST",
+          path: "/login",
+          configText: "{}",
+          continueOnFailure: false,
+          nodeId: "AI-NODE-1",
+          actionPosition: "main",
+        }],
+      },
+      warnings: ["请确认 token 绑定"],
+    })),
+    createAiSkillRun: vi.fn(async (skillId: string, payload: any) => {
+      lastAiRunPayload = { skillId, payload };
+      return {
+        runId: "ai-run-1",
+        skillId,
+        operation: payload.operation,
+        status: "queued",
+      };
+    }),
+    getAiSkillRun: vi.fn(async () => ({
+      runId: "ai-run-1",
+      skillId: "scenario-composer",
+      operation: "compose",
+      projectId: lastAiRunPayload?.payload?.project_id ?? 7,
+      status: "completed",
+      events: [],
+      result: {
+        project_id: lastAiRunPayload?.payload?.project_id ?? 7,
+        environment_id: lastAiRunPayload?.payload?.environment_id ?? 1,
+        source_summary: "组合登录后查询用户详情",
+        scenario: {
+          name: lastAiRunPayload?.payload?.input?.scenario_name || "AI 组合场景",
+          description: lastAiRunPayload?.payload?.input?.requirement,
+          environment_id: lastAiRunPayload?.payload?.environment_id ?? 1,
+          tags: ["ai-composed"],
+          datasets: [],
+          nodes: [{
+            id: "AI-NODE-1",
+            name: "登录接口",
+            test_case: {
+              id: "AI-STEP-1",
+              kind: "api_case",
+              reference_id: lastAiRunPayload?.payload?.input?.http_test_case_ids?.[0],
+              name: "登录接口",
+              method: "POST",
+              path: "/login",
+              config: {},
+            },
+            before_actions: [],
+            after_actions: [],
+          }],
+        },
+        warnings: ["请确认 token 绑定"],
+      },
+      createdAt: "",
+      updatedAt: "",
+    })),
+    subscribeAiSkillRunEvents: vi.fn(async (_runId: string, onEvent: (event: any) => void) => {
+      onEvent({ id: "1", sequence: 1, event: "run.queued", payload: { skill_id: "scenario-composer", operation: "compose" } });
+      onEvent({ id: "2", sequence: 2, event: "run.started", payload: {} });
+      onEvent({ id: "3", sequence: 3, event: "model.delta", payload: { content: "正在分析候选用例..." } });
+      onEvent({ id: "4", sequence: 4, event: "step.started", payload: { title: "读取候选用例" } });
+      onEvent({ id: "5", sequence: 5, event: "tool.started", payload: { name: "load_candidate_cases", summary: "读取候选用例" } });
+      onEvent({ id: "6", sequence: 6, event: "tool.completed", payload: { name: "load_candidate_cases", summary: "已读取 2 个候选" } });
+      onEvent({
+        id: "7",
+        sequence: 7,
+        event: "run.completed",
+        payload: {
+          result: {
+            project_id: lastAiRunPayload?.payload?.project_id ?? 7,
+            environment_id: lastAiRunPayload?.payload?.environment_id ?? 1,
+            source_summary: "组合登录后查询用户详情",
+            scenario: {
+              name: lastAiRunPayload?.payload?.input?.scenario_name || "AI 组合场景",
+              description: lastAiRunPayload?.payload?.input?.requirement,
+              environment_id: lastAiRunPayload?.payload?.environment_id ?? 1,
+              tags: ["ai-composed"],
+              datasets: [],
+              nodes: [{
+                id: "AI-NODE-1",
+                name: "登录接口",
+                test_case: {
+                  id: "AI-STEP-1",
+                  kind: "api_case",
+                  reference_id: lastAiRunPayload?.payload?.input?.http_test_case_ids?.[0],
+                  name: "登录接口",
+                  method: "POST",
+                  path: "/login",
+                  config: {},
+                },
+                before_actions: [],
+                after_actions: [],
+              }],
+            },
+            warnings: ["请确认 token 绑定"],
+          },
+        },
+      });
+    }),
+    createScenario: vi.fn(save),
     deleteScenario: vi.fn(async (projectId: number, scenarioId: string) => {
       scenariosByProject.set(projectId, (scenariosByProject.get(projectId) ?? []).filter((item) => item.id !== scenarioId));
     }),
@@ -47,7 +172,7 @@ const api = vi.hoisted(() => {
         projectId,
         environmentId: scenario.environmentId,
         environmentName: "UAT",
-        datasetName: scenario.datasets[0]?.name ?? "空变量",
+        datasetName: scenario.datasets[0]?.name ?? "无数据输入",
         status: "passed",
         startedAt: new Date().toISOString(),
         durationMs: 350,
@@ -119,6 +244,8 @@ vi.mock("../api/scenarios", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../api/scenarios")>();
   return {
     ...actual,
+    composeScenarioWithAi: api.composeScenarioWithAi,
+    createScenario: api.createScenario,
     deleteScenario: api.deleteScenario,
     deleteScenarioRun: api.deleteScenarioRun,
     duplicateScenario: api.duplicateScenario,
@@ -132,12 +259,18 @@ vi.mock("../api/scenarios", async (importOriginal) => {
   };
 });
 
+vi.mock("../api/aiSkillRuns", () => ({
+  createAiSkillRun: api.createAiSkillRun,
+  getAiSkillRun: api.getAiSkillRun,
+  subscribeAiSkillRunEvents: api.subscribeAiSkillRunEvents,
+}));
+
 const environments = [
   { id: 1, name: "UAT", baseUrl: "https://uat.example.com", description: "", isDefault: true },
   { id: 2, name: "预发布", baseUrl: "https://staging.example.com", description: "", isDefault: false },
 ];
 
-function mockAssets() {
+function mockAssets(options: { withMetadata?: boolean } = {}) {
   return vi.spyOn(globalThis, "fetch")
     .mockResolvedValueOnce({
       ok: true,
@@ -152,12 +285,15 @@ function mockAssets() {
           query_params: { tenant_id: "1" },
           body_type: "json",
           body: { company_id: "", order: { user_id: "" } },
+          extractors: options.withMetadata ? [{ name: "token", path: "data.token" }] : [],
+          assertions: options.withMetadata ? [{ type: "status_code", expected: 200 }] : [],
+          latest_execution_status: options.withMetadata ? "passed" : undefined,
         }],
       }),
     } as Response)
     .mockResolvedValueOnce({
       ok: true,
-      json: async () => ({ code: 0, data: [{ id: 11, name: "消息订阅", path: "/events" }] }),
+      json: async () => ({ code: 0, data: [{ id: 11, name: "消息订阅", path: "/events", latest_execution_status: options.withMetadata ? "failed" : undefined, extractors: [], assertions: [] }] }),
     } as Response);
 }
 
@@ -182,9 +318,10 @@ function expandRequestConfig() {
 }
 
 describe("ScenariosPage", () => {
-  beforeEach(() => {
+    beforeEach(() => {
     api.scenariosByProject.clear();
     api.runsByProject.clear();
+    api.resetAiRunPayload();
     vi.clearAllMocks();
   });
 
@@ -245,6 +382,76 @@ describe("ScenariosPage", () => {
     fireEvent.click(within(assertionSection).getByText("断言结果").closest("summary") as HTMLElement);
     expect(assertionSection).toHaveAttribute("open");
     expect(within(assertionSection).getByText("HTTP 状态码")).toBeInTheDocument();
+  });
+
+  it("previews and saves an AI scenario composer draft after confirmation", async () => {
+    const onAction = vi.fn();
+    mockAssets({ withMetadata: true });
+    render(<ScenariosPage environmentId={1} environments={environments} onAction={onAction} projectId={7} />);
+
+    await screen.findByText("登录接口");
+    fireEvent.click(screen.getByRole("button", { name: "AI 组合" }));
+    const dialog = screen.getByRole("dialog", { name: "AI 智能场景组合" });
+    fireEvent.change(within(dialog).getByLabelText("智能场景组合目标"), {
+      target: { value: "组合登录后查询用户详情的主链路" },
+    });
+    fireEvent.change(within(dialog).getByLabelText("智能场景名称"), {
+      target: { value: "用户详情主链路" },
+    });
+    expect(within(dialog).getAllByText(/passed/).length).toBeGreaterThan(0);
+    expect(within(dialog).getAllByText(/提取器 1/).length).toBeGreaterThan(0);
+    expect(within(dialog).getAllByText(/断言 1/).length).toBeGreaterThan(0);
+    expect(within(dialog).getByLabelText("智能场景执行环境")).toHaveValue("1");
+    expect(within(dialog).getByText("已选顺序")).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "清空 HTTP" })).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "清空 WebSocket" })).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "清空" }));
+    expect(within(dialog).getByText("尚未选择候选测试用例。")).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "全选 HTTP" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "全选 WebSocket" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "生成场景草稿" }));
+
+    await waitFor(() => expect(api.createAiSkillRun).toHaveBeenCalledWith("scenario-composer", {
+      operation: "compose",
+      project_id: 7,
+      environment_id: 1,
+      input: expect.objectContaining({
+        requirement: "组合登录后查询用户详情的主链路",
+        scenario_name: "用户详情主链路",
+        http_test_case_ids: [10],
+        websocket_test_case_ids: [11],
+        include_bindings: true,
+        include_assertions: true,
+        include_hooks: true,
+        include_datasets: false,
+        include_latest_execution: true,
+        execute_candidates: false,
+        max_nodes: 10,
+      }),
+    }));
+    expect(await within(dialog).findByText("AI Skill Run")).toBeInTheDocument();
+    expect(within(dialog).getByText(/正在分析候选用例/)).toBeInTheDocument();
+    expect(within(dialog).getByText("最新工具调用链路")).toBeInTheDocument();
+    expect(within(dialog).getByText("事件历史")).toBeInTheDocument();
+    expect(within(dialog).getAllByText("读取候选用例").length).toBeGreaterThan(0);
+    expect(within(dialog).getAllByText("load_candidate_cases").length).toBeGreaterThan(0);
+    const preview = screen.getByRole("dialog", { name: "AI 生成结果预览" });
+    expect(within(preview).getByText("用户详情主链路")).toBeInTheDocument();
+    expect(within(preview).getByText("请确认 token 绑定")).toBeInTheDocument();
+    expect(within(preview).getByText(/reference_id 10/)).toBeInTheDocument();
+    expect(api.createScenario).not.toHaveBeenCalled();
+    fireEvent.click(within(preview).getByRole("button", { name: "确认保存场景" }));
+
+    await waitFor(() => expect(api.createScenario).toHaveBeenCalledWith(7, expect.objectContaining({
+      id: "",
+      name: "用户详情主链路",
+      steps: expect.arrayContaining([expect.objectContaining({ referenceId: 10 })]),
+    })));
+    expect(screen.queryByRole("dialog", { name: "AI 生成结果预览" })).not.toBeInTheDocument();
+    expect(screen.getByLabelText("场景名称")).toHaveValue("用户详情主链路");
+    expect(screen.getByText("测试用例节点 1")).toBeInTheDocument();
+    expect(onAction).toHaveBeenCalledWith(expect.stringContaining("AI 生成场景草稿 用户详情主链路 已完成"));
+    expect(onAction).toHaveBeenCalledWith(expect.stringContaining("已保存 AI 生成场景 用户详情主链路"));
   });
 
   it("opens a phase-specific action picker from each canvas section", async () => {
@@ -881,6 +1088,9 @@ describe("ScenariosPage", () => {
     expect(responseCard).toHaveTextContent("响应信息");
     expect(responseCard).toHaveTextContent("36 ms");
     expect(responseCard).toHaveTextContent("200");
+    expect(responseCard).toHaveTextContent("响应预览");
+    expect(responseCard).toHaveTextContent("data.company_id");
+    expect(responseCard).toHaveTextContent("9527");
     fireEvent.click(responseExpand);
     const responseDialog = screen.getByRole("dialog", { name: "登录接口 调试响应" });
     const executeCall = fetchMock.mock.calls.find(([url]) => String(url).includes("/test-cases/execute-unsaved"));
@@ -918,6 +1128,81 @@ describe("ScenariosPage", () => {
     fireEvent.change(screen.getByLabelText("响应 JSON 路径"), { target: { value: "data.company_name" } });
     expect(screen.getByText("本次调试取值").closest("small")).toHaveTextContent("测试企业");
     expect(screen.getByText("1 取值 · 0 引用")).toBeInTheDocument();
+  });
+
+  it("debugs a script action with manual input values", async () => {
+    const fetchMock = mockAssets();
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        code: 0,
+        data: {
+          status: "passed",
+          duration_ms: 22,
+          outputs: {
+            result: { success: true, companyId: 9527 },
+          },
+        },
+      }),
+    } as Response);
+    render(<ScenariosPage environmentId={1} environments={environments} onAction={vi.fn()} projectId={7} />);
+
+    fireEvent.click(screen.getByTitle("新建场景"));
+    await addMainAction(/登录接口/);
+    await addAttachedAction(/设置固定值/);
+    fireEvent.change(screen.getByLabelText("固定值输出变量"), { target: { value: "companyId" } });
+    await addAttachedAction(/执行脚本/);
+    expect(screen.queryByRole("button", { name: /请求配置/ })).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("脚本输入变量"), { target: { value: "companyId" } });
+    expect(screen.getByLabelText("脚本调试输入 JSON")).toHaveValue(JSON.stringify({ companyId: null }, null, 2));
+    fireEvent.change(screen.getByLabelText("脚本调试输入 JSON"), { target: { value: '{"companyId":9527}' } });
+
+    fireEvent.click(screen.getByRole("button", { name: "执行步骤" }));
+
+    const responseExpand = await screen.findByRole("button", { name: "展开调试结果" });
+    const executeCall = fetchMock.mock.calls.find(([url]) => String(url).includes("/scenarios/actions/script/execute-unsaved"));
+    expect(executeCall).toBeDefined();
+    expect(JSON.parse(String((executeCall?.[1] as RequestInit).body))).toEqual({
+      code: "result = None",
+      environment_id: 1,
+      input_values: { companyId: 9527 },
+      inputs: ["companyId"],
+      language: "python",
+      outputs: ["result"],
+      timeout_ms: 10000,
+    });
+    expect(responseExpand.closest(".scenario-debug-response-card")).toHaveTextContent("22 ms");
+    expect(responseExpand.closest(".scenario-debug-response-card")).toHaveTextContent("调试结果");
+    expect(responseExpand.closest(".scenario-debug-response-card")).toHaveTextContent("1 个");
+    expect(responseExpand.closest(".scenario-debug-response-card")).toHaveTextContent("输出变量");
+    expect(responseExpand.closest(".scenario-debug-response-card")).toHaveTextContent("result.success");
+    expect(responseExpand.closest(".scenario-debug-response-card")).toHaveTextContent("true");
+    fireEvent.click(responseExpand);
+    const responseDialog = screen.getByRole("dialog", { name: "执行脚本 调试结果" });
+    fireEvent.click(within(responseDialog).getByRole("button", { name: "展开 result" }));
+    expect(within(responseDialog).getByText("companyId")).toBeInTheDocument();
+    expect(within(responseDialog).getByText("9527")).toBeInTheDocument();
+    expect(within(responseDialog).queryByRole("button", { name: /设为变量/ })).not.toBeInTheDocument();
+    expect(within(responseDialog).queryByRole("button", { name: /设为断言/ })).not.toBeInTheDocument();
+  });
+
+  it("shows a script debug result card when the debug request fails", async () => {
+    const fetchMock = mockAssets();
+    fetchMock.mockRejectedValueOnce(new Error("脚本沙箱执行失败"));
+    const onAction = vi.fn();
+    render(<ScenariosPage environmentId={1} environments={environments} onAction={onAction} projectId={7} />);
+
+    fireEvent.click(screen.getByTitle("新建场景"));
+    await addMainAction(/登录接口/);
+    await addAttachedAction(/执行脚本/);
+    fireEvent.click(screen.getByRole("button", { name: "执行步骤" }));
+
+    const responseExpand = await screen.findByRole("button", { name: "展开调试结果" });
+    const responseCard = responseExpand.closest(".scenario-debug-response-card") as HTMLElement;
+    expect(responseCard).toHaveClass("error");
+    expect(responseCard).toHaveTextContent("调试结果");
+    expect(responseCard).toHaveTextContent("脚本沙箱执行失败");
+    expect(onAction).toHaveBeenCalledWith("脚本沙箱执行失败");
   });
 
   it("marks the canvas step as failed after a failed single-step execution", async () => {
@@ -1274,6 +1559,46 @@ describe("ScenariosPage", () => {
 
     await waitFor(() => expect(screen.queryByText("未命名测试场景 - 副本")).not.toBeInTheDocument());
     expect(api.deleteScenario).toHaveBeenCalled();
+  });
+
+  it("uses the scenario environment name for debug runs when run payload omits it", async () => {
+    const scenario = {
+      id: "SCENARIO-RUN-ENV-NAME",
+      projectId: 7,
+      version: 1,
+      name: "场景环境回退",
+      description: "",
+      environmentId: 4,
+      environmentName: "test",
+      tags: [],
+      steps: [],
+      datasets: [{ id: "DATA-1", name: "无数据输入", enabled: true, variablesText: "{}", records: [] }],
+      createdAt: "",
+      updatedAt: "",
+    };
+    api.scenariosByProject.set(7, [scenario]);
+    api.runsByProject.set(7, [{
+      id: "RUN-WITHOUT-ENV-NAME",
+      scenarioId: scenario.id,
+      scenarioName: scenario.name,
+      projectId: 7,
+      environmentId: 4,
+      datasetName: "无数据输入",
+      status: "passed",
+      startedAt: "2026-06-23T00:00:38Z",
+      durationMs: 15100,
+      detailLoaded: true,
+      stepResults: [],
+    }]);
+    mockAssets();
+
+    render(<ScenariosPage environmentId={4} environments={environments} onAction={vi.fn()} projectId={7} />);
+    fireEvent.click(await screen.findByRole("button", { name: /场景环境回退/ }));
+    await waitFor(() => expect(screen.getByLabelText("场景名称")).toHaveValue("场景环境回退"));
+    fireEvent.click(screen.getByRole("button", { name: "调试记录" }));
+
+    expect(screen.getByText("test · 无数据输入")).toBeInTheDocument();
+    expect(screen.queryByText(/未命名环境/)).not.toBeInTheDocument();
   });
 
   it("deletes a scenario debug run after confirmation", async () => {

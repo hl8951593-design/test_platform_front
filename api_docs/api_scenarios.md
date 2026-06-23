@@ -13,6 +13,7 @@
 | GET/POST | `/scenarios?project_id={id}` | `scenario:view` / `scenario:manage` | 分页查询、创建场景 |
 | GET/PUT/DELETE | `/scenarios/{scenario_id}?project_id={id}` | `scenario:view` / `scenario:manage` | 详情、更新、软删除 |
 | POST | `/scenarios/{scenario_id}/execute?project_id={id}` | `test:execute` | 返回 `202 Accepted`，创建一组异步场景运行 |
+| POST | `/scenarios/actions/script/execute-unsaved?project_id={id}` | `test:execute` | 使用当前未保存脚本配置和调试输入执行一次沙箱脚本 |
 | GET | `/scenario-runs?project_id={id}&scenario_id={id}` | `scenario:view` | 最近 200 条运行 |
 | GET/DELETE | `/scenario-runs/{run_id}?project_id={id}` | `scenario:view` / `scenario:manage` | 运行和步骤详情、删除调试记录 |
 | GET | `/scenario-runs/{run_id}/events?project_id={id}` | `scenario:view` | Bearer 鉴权 SSE 事件流 |
@@ -70,6 +71,8 @@
 }
 ```
 
+响应中的 `environment_name` 是展示字段，前端会保存在场景模型中，并在调试记录自身未返回环境名时作为标题兜底；创建或更新场景时仍只提交 `environment_id`。
+
 ### 测试用例节点与绑定动作
 
 场景的基本编排单位改为 `nodes[]`。每个节点必须有且只有一个 `test_case`，并可包含有序的 `before_actions[]` 和 `after_actions[]`。动作的位置由容器表达，不再提交 `steps` 或 `execution_phase`。
@@ -123,6 +126,83 @@
 - JavaScript 同样不能访问 Node.js 模块、文件系统或网络。前端只做即时的常见错误检查，后端必须再次执行完整语法、安全、资源和 JSON 序列化校验。
 - 历史复杂表达式必须原样返回。前端不展示原始 JSON 编辑入口；用户使用结构化表单修改后，配置转换为标准条件表达式。
 - 后端不得依赖前端专用展示字段；步骤名称和 `path` 摘要不参与条件或等待执行。
+
+### 脚本动作调试
+
+脚本动作支持在场景保存前单独调试。前端提交当前编辑器内容、声明输入输出和本次调试输入值：
+
+```http
+POST /api/v1/scenarios/actions/script/execute-unsaved?project_id=7
+```
+
+```json
+{
+  "environment_id": 1,
+  "language": "python",
+  "code": "result = {\"ok\": companyId != 1}",
+  "inputs": ["companyId"],
+  "outputs": ["result"],
+  "timeout_ms": 10000,
+  "input_values": {
+    "companyId": 9527
+  }
+}
+```
+
+`input_values` 只用于本次调试，不写入场景版本。保存和整场运行仍要求 `inputs[]`
+来自执行位置之前已经声明的变量；调试允许用户手工提供输入值来验证脚本逻辑。
+后端必须复用正式脚本沙箱的语言白名单、禁用能力、超时、资源限额和 JSON 序列化校验。
+
+响应可以直接返回输出映射，也可以放在 `response_snapshot.outputs`、`response_snapshot.json`
+或 `outputs` 中：
+
+```json
+{
+  "status": "passed",
+  "duration_ms": 24,
+  "outputs": {
+    "result": {
+      "ok": true
+    }
+  },
+  "error_message": ""
+}
+```
+
+### AI 智能场景组合
+
+智能场景组合通过 AI skill 统一入口提供：
+
+```http
+POST /api/v1/ai/skills/scenario-composer/runs
+GET /api/v1/ai/skill-runs/{run_id}/events
+GET /api/v1/ai/skill-runs/{run_id}
+```
+
+请求体：
+
+```json
+{
+  "operation": "compose",
+  "project_id": 1,
+  "environment_id": 2,
+  "input": {
+    "requirement": "组合登录后查询用户详情的主链路",
+    "scenario_name": "用户详情主链路",
+    "http_test_case_ids": [1001, 1002],
+    "websocket_test_case_ids": [],
+    "include_bindings": true,
+    "include_assertions": true,
+    "include_hooks": true,
+    "include_datasets": false,
+    "include_latest_execution": true,
+    "execute_candidates": false,
+    "max_nodes": 10
+  }
+}
+```
+
+创建 run 后前端订阅 SSE 事件，展示 `model.delta` 累加文本以及 `tool.*`、`step.*` 执行轨迹。`run.completed` 的 `payload.result.scenario` 是结构兼容场景创建请求的草稿，不直接保存；如果 SSE 中断，前端通过 run 快照读取最终 `result` 或 `error_message`。前端必须先展示预览，由用户检查 `warnings`、节点顺序、前后置动作、主用例 config、提取器、变量绑定和断言；用户确认后再调用 `/scenarios?project_id={id}` 保存。`execute_candidates` 默认应为 `false`，开启前需要二次确认，因为候选用例会真实执行并可能产生业务副作用。
 
 ## 数据集与测试记录
 
