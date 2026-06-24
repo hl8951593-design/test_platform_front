@@ -431,8 +431,8 @@ describe("ScenariosPage", () => {
     }));
     expect(await within(dialog).findByText("AI Skill Run")).toBeInTheDocument();
     expect(within(dialog).getByText(/正在分析候选用例/)).toBeInTheDocument();
-    expect(within(dialog).getByText("最新工具调用链路")).toBeInTheDocument();
-    expect(within(dialog).getByText("事件历史")).toBeInTheDocument();
+    expect(within(dialog).getByText("AI 流式输出")).toBeInTheDocument();
+    expect(within(dialog).queryByText("事件历史")).not.toBeInTheDocument();
     expect(within(dialog).getAllByText("读取候选用例").length).toBeGreaterThan(0);
     expect(within(dialog).getAllByText("load_candidate_cases").length).toBeGreaterThan(0);
     const preview = screen.getByRole("dialog", { name: "AI 生成结果预览" });
@@ -557,6 +557,8 @@ describe("ScenariosPage", () => {
     expect(saved.steps.find((step: any) => step.kind === "random")).toEqual(expect.objectContaining({ actionPosition: "before" }));
     expect(JSON.parse(saved.steps.find((step: any) => step.kind === "fixed_value").configText)).toEqual(expect.objectContaining({ output: "cleanupResult", value: true }));
     expect(JSON.parse(saved.steps.find((step: any) => step.kind === "script").configText)).toEqual(expect.objectContaining({ language: "javascript", inputs: ["orderNo"], outputs: ["result"] }));
+    expect(document.querySelector(".scenario-node-connector")).not.toBeInTheDocument();
+    expect(document.querySelector(".scenario-node-actions .scenario-connector")).not.toBeInTheDocument();
   });
 
   it("shows realtime recovery status and calibrates from run detail after an event gap", async () => {
@@ -1408,8 +1410,8 @@ describe("ScenariosPage", () => {
       expect(element).toBeInTheDocument();
       return element as HTMLElement;
     });
-    expect(connector).toHaveTextContent("1 条数据引用");
-    expect(connector).toHaveTextContent("进入步骤 2");
+    expect(connector).toHaveTextContent("1 条跨节点引用");
+    expect(connector).toHaveTextContent("进入测试用例节点 2");
     expect(connector).toHaveTextContent("步骤 1");
 
     const cards = document.querySelectorAll(".scenario-step-card");

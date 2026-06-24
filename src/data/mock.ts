@@ -5,7 +5,7 @@ export const routes: RouteMeta[] = [
   { key: "projects", icon: "folder_special", label: "项目管理", title: "项目管理", subtitle: "监控并管理所有自动化测试项目的进度与覆盖率。", variant: "project" },
   { key: "plans", icon: "event_note", label: "测试计划", title: "自动化测试计划", variant: "light" },
   { key: "flow", icon: "visibility", label: "可视化编排", title: "可视化编排", subtitle: "通过拖拽测试用例与断言节点，组合可执行的自动化测试流程", variant: "dark" },
-  { key: "scenarios", icon: "account_tree", label: "场景组合", title: "电商结账流程", variant: "dark" },
+  { key: "scenarios", icon: "account_tree", label: "场景组合", title: "场景组合", variant: "dark" },
   { key: "api", icon: "api", label: "接口测试用例", title: "接口测试用例", subtitle: "维护接口定义、参数、断言与响应，为自动化测试提供接口数据源。", variant: "light" },
   { key: "executions", icon: "play_circle", label: "执行中心", title: "执行控制台", variant: "dark" },
   { key: "defects", icon: "bug_report", label: "缺陷跟踪", title: "缺陷跟踪", subtitle: "记录、分派并推进 Bug 从创建到关闭的完整流程。", variant: "light" },

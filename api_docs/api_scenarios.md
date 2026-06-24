@@ -1,7 +1,7 @@
 # 场景组合接口
 
 状态：破坏性目标契约（前端已切换，后端需同步实现）
-最后核验：2026-06-19
+最后核验：2026-06-24
 
 场景将 HTTP/WebSocket 基础用例、等待和条件步骤编排为可版本化的业务流程。基础路径为
 `/api/v1`，接口使用 Bearer Token，成功响应统一为 `{code, message, data}`。
@@ -202,7 +202,7 @@ GET /api/v1/ai/skill-runs/{run_id}
 }
 ```
 
-创建 run 后前端订阅 SSE 事件，展示 `model.delta` 累加文本以及 `tool.*`、`step.*` 执行轨迹。`run.completed` 的 `payload.result.scenario` 是结构兼容场景创建请求的草稿，不直接保存；如果 SSE 中断，前端通过 run 快照读取最终 `result` 或 `error_message`。前端必须先展示预览，由用户检查 `warnings`、节点顺序、前后置动作、主用例 config、提取器、变量绑定和断言；用户确认后再调用 `/scenarios?project_id={id}` 保存。`execute_candidates` 默认应为 `false`，开启前需要二次确认，因为候选用例会真实执行并可能产生业务副作用。
+创建 run 后前端订阅 SSE 事件，把 `model.delta` 累加文本以及 `tool.*`、`step.*`、`run.*` 执行轨迹合并展示为单一流式输出，并自动滚动到最新返回内容。`run.completed` 的 `payload.result.scenario` 是结构兼容场景创建请求的草稿，不直接保存；如果 SSE 中断，前端通过 run 快照读取最终 `result` 或 `error_message`。前端必须先展示预览，由用户检查 `warnings`、节点顺序、前后置动作、主用例 config、提取器、变量绑定和断言；用户确认后再调用 `/scenarios?project_id={id}` 保存。`execute_candidates` 默认应为 `false`，开启前需要二次确认，因为候选用例会真实执行并可能产生业务副作用。
 
 ## 数据集与测试记录
 

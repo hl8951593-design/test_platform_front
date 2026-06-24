@@ -57,6 +57,7 @@ function mapQueued(value: unknown): AiSkillRunQueued {
 function mapEvent(value: unknown): AiSkillRunEvent {
   const source = asRecord(value);
   return {
+    id: source.id === undefined ? undefined : String(source.id),
     sequence: source.sequence === undefined ? undefined : Number(source.sequence),
     event: String(source.event ?? source.type ?? "message"),
     payload: asRecord(source.payload ?? source.data),
@@ -96,7 +97,16 @@ function parseSseChunk(chunk: string): AiSkillRunEvent | undefined {
   });
 
   if (!event && !data) return undefined;
-  const payload = data ? asRecord(JSON.parse(data)) : {};
+  const rawPayload = data ? JSON.parse(data) : {};
+  const recordPayload = asRecord(rawPayload);
+  if ((event === "message" || event === "") && (recordPayload.event !== undefined || recordPayload.type !== undefined)) {
+    return mapEvent({
+      ...recordPayload,
+      id: recordPayload.id ?? id,
+      sequence: recordPayload.sequence ?? (id === undefined ? undefined : Number(id)),
+    });
+  }
+  const payload = asRecord(recordPayload.payload ?? recordPayload.data ?? recordPayload);
   return {
     id,
     sequence: id === undefined ? undefined : Number(id),

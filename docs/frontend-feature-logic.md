@@ -1,7 +1,7 @@
 # 前端功能逻辑说明
 
 状态：当前实现
-最后核验：2026-06-20
+最后核验：2026-06-24
 
 本文档记录 TestAuto 前端当前已经实现的核心功能逻辑，作为后续开发、联调和排查问题时的依据。代码以 `src/App.tsx`、`src/api/`、`src/pages/PlansPage.tsx`、`src/pages/ApiPage.tsx`、`src/pages/EnvironmentConfigsPage.tsx`、`src/pages/DefectsPage.tsx` 为主。
 
@@ -169,9 +169,9 @@ GET /ai/skill-runs/{run_id}
 
 请求体固定使用 `operation=compose`，并提交 `project_id`、`environment_id` 与 `input`。`input` 包含自然语言 `requirement`、可选 `scenario_name`、候选 `http_test_case_ids` / `websocket_test_case_ids`、`include_bindings`、`include_assertions`、`include_hooks`、`include_datasets`、`include_latest_execution`、`execute_candidates` 和 `max_nodes`。`execute_candidates` 默认关闭；开启时页面要求用户勾选二次确认，因为它会真实调用候选用例接口。
 
-候选 HTTP/WebSocket 用例支持多选、分组全选或清空和排序，已选顺序会原样提交给后端作为编排提示。选择器展示最近执行状态、提取器数量和断言数量。创建 AI Skill Run 后，页面用带鉴权 Header 的 `fetch` 消费 SSE：左侧累加 `model.delta` 作为 AI 生成文本，右侧实时展示由 `run.*`、`step.*`、`tool.*` 事件派生的最新工具调用链路，并倒序保留最近事件历史；`heartbeat` 只用于维持连接，不作为业务进度展示。若 SSE 中断，页面查询 run 快照恢复最终 `result` 或 `error_message`。`run.completed` 后前端展示“AI 生成结果预览”，单独列出 `warnings`、场景摘要、节点顺序、前后置动作、主用例 config、提取器、变量绑定和断言；提取器、变量绑定和断言在节点卡片中以结构化短行展示，原始复杂配置保留在可展开的 config 详情中；用户点击“确认保存场景”后才调用 `POST /scenarios?project_id={project_id}` 创建正式场景。
+候选 HTTP/WebSocket 用例支持多选、分组全选或清空和排序，已选顺序会原样提交给后端作为编排提示。选择器展示最近执行状态、提取器数量和断言数量。创建 AI Skill Run 后，页面用带鉴权 Header 的 `fetch` 消费 SSE：`model.delta` 文本、`run.*`、`step.*` 和 `tool.*` 事件合并展示在同一条“AI 流式输出”中，工具调用不再拆成独立调用历史，最新返回内容会自动滚动到可见位置；`heartbeat` 只用于维持连接，不作为业务进度展示。若 SSE 中断，页面查询 run 快照恢复最终 `result` 或 `error_message`。`run.completed` 后前端展示“AI 生成结果预览”，单独列出 `warnings`、场景摘要、节点顺序、前后置动作、主用例 config、提取器、变量绑定和断言；提取器、变量绑定和断言在节点卡片中以结构化短行展示，原始复杂配置保留在可展开的 config 详情中；用户点击“确认保存场景”后才调用 `POST /scenarios?project_id={project_id}` 创建正式场景。
 
-场景画布以测试用例节点为基本单位。左侧只添加 HTTP/WebSocket 主测试用例；每张画布用例卡直接提供前置和后置入口，弹窗明确显示绑定的测试用例。前置、后置动作不会成为场景全局阶段，也不能脱离节点存在。删除主测试用例会连同其绑定动作一起删除。
+场景画布以测试用例节点为基本单位。左侧只添加 HTTP/WebSocket 主测试用例；每张画布用例卡直接提供前置和后置入口，弹窗明确显示绑定的测试用例。前置、后置动作不会成为场景全局阶段，也不能脱离节点存在。删除主测试用例会连同其绑定动作一起删除。画布连线只连接主测试用例节点，节点内部的前置动作、后置动作、响应取值、变量引用和工具信息不参与连线；节点内明细默认折叠，展开后在明细区域滚动展示。
 
 场景响应中的 `environment_name` 会随场景模型保留，用于页面标题、预览和调试记录展示。调试记录自身未返回环境名时，列表标题使用所属场景的 `environment_name` 作为展示兜底，避免已命名环境显示为“未命名环境”。
 

@@ -1,5 +1,5 @@
 ﻿import { useCallback, useEffect, useMemo, useState } from "react";
-import { lazy, Suspense, useRef, type ReactNode } from "react";
+import { Fragment, lazy, Suspense, useRef, type ReactNode } from "react";
 import {
   executeUnsavedTestCase,
   executeUnsavedWebSocketTestCase,
@@ -213,7 +213,6 @@ interface ScenarioComposerRunState {
   runId?: string;
   status: AiSkillRunStatus;
   timeline: AiSkillRunEvent[];
-  modelText: string;
   errorMessage?: string;
 }
 
@@ -611,10 +610,9 @@ export function ScenariosPage({
   const handleComposerRunEvent = (event: AiSkillRunEvent, selectedEnvironmentId: number) => {
     if (event.event === "heartbeat") return;
     if (event.event === "model.delta") {
-      const content = event.payload.content === undefined ? "" : String(event.payload.content);
       setComposerRun((current) => current ? {
         ...current,
-        modelText: `${current.modelText}${content}`,
+        timeline: [...current.timeline, event],
       } : current);
       return;
     }
@@ -686,7 +684,7 @@ export function ScenariosPage({
         environment_id: selectedEnvironmentId,
         input: payload,
       });
-      setComposerRun({ runId: run.runId, status: run.status, timeline: [], modelText: "" });
+      setComposerRun({ runId: run.runId, status: run.status, timeline: [] });
       onAction(`已创建 AI Skill Run ${run.runId}`);
       await subscribeAiSkillRunEvents(run.runId, (event) => handleComposerRunEvent(event, selectedEnvironmentId), {
         signal: controller.signal,
@@ -1438,45 +1436,89 @@ function aiRunEventClass(event: AiSkillRunEvent, suffix = "") {
   return `${event.event.replace(".", "-")}${suffix}`.trim();
 }
 
-function latestAiRunChain(events: AiSkillRunEvent[]) {
-  const latestRun = [...events].reverse().find((event) => event.event.startsWith("run."));
-  const latestStepIndex = events.map((event) => event.event.startsWith("step.")).lastIndexOf(true);
-  const latestStep = latestStepIndex >= 0 ? events[latestStepIndex] : undefined;
-  const toolsAfterLatestStep = events
-    .filter((event, index) => event.event.startsWith("tool.") && (latestStepIndex < 0 || index >= latestStepIndex))
-    .slice(-4);
-  const fallbackTools = toolsAfterLatestStep.length ? toolsAfterLatestStep : events.filter((event) => event.event.startsWith("tool.")).slice(-4);
-  const chain = [latestRun, latestStep, ...fallbackTools].filter(Boolean) as AiSkillRunEvent[];
-  return chain.filter((event, index) => chain.indexOf(event) === index);
+interface AiRunStreamEntry {
+  body: string;
+  event: AiSkillRunEvent;
+  meta: string;
+  title: string;
+}
+
+function aiRunPayloadText(payload: Record<string, unknown>, keys: string[]) {
+  for (const key of keys) {
+    const value = payload[key];
+    if (value !== undefined && value !== null && value !== "") return typeof value === "string" ? value : JSON.stringify(value, null, 2);
+  }
+  return "";
+}
+
+function aiRunModelDelta(event: AiSkillRunEvent) {
+  return aiRunPayloadText(event.payload, ["content", "text", "delta", "message", "output"]);
+}
+
+function aiRunEventBody(event: AiSkillRunEvent) {
+  if (event.event === "run.completed") return "已生成场景草稿，正在打开预览。";
+  if (event.event === "run.failed") return aiRunPayloadText(event.payload, ["error_message", "error", "message"]) || "智能场景组合失败。";
+  return aiRunPayloadText(event.payload, ["content", "text", "message", "summary", "input", "arguments", "args", "result", "output", "error_message", "error"]);
+}
+
+function aiRunStreamEntries(events: AiSkillRunEvent[]) {
+  const entries: AiRunStreamEntry[] = [];
+  let modelText = "";
+  let modelEvent: AiSkillRunEvent | undefined;
+  const flushModelText = () => {
+    if (!modelText || !modelEvent) return;
+    entries.push({
+      body: modelText,
+      event: modelEvent,
+      meta: "模型输出",
+      title: "AI 输出",
+    });
+    modelText = "";
+    modelEvent = undefined;
+  };
+
+  events.forEach((event) => {
+    if (event.event === "heartbeat") return;
+    if (event.event === "model.delta") {
+      modelText += aiRunModelDelta(event);
+      modelEvent = event;
+      return;
+    }
+    flushModelText();
+    entries.push({
+      body: aiRunEventBody(event),
+      event,
+      meta: aiRunEventMeta(event),
+      title: aiRunEventTitle(event),
+    });
+  });
+  flushModelText();
+  return entries;
 }
 
 function ScenarioComposerRunPanel({ run }: { run: ScenarioComposerRunState }) {
-  const visibleEvents = run.timeline.filter((event) => event.event !== "model.delta" && event.event !== "heartbeat");
-  const latestChain = latestAiRunChain(visibleEvents);
-  const latestHistory = [...visibleEvents].slice(-8).reverse();
+  const streamRef = useRef<HTMLDivElement | null>(null);
+  const entries = aiRunStreamEntries(run.timeline);
+  const latestEntry = entries[entries.length - 1];
+  useEffect(() => {
+    const element = streamRef.current;
+    if (element) element.scrollTop = element.scrollHeight;
+  }, [entries.length, latestEntry?.body]);
   return <section className={`scenario-ai-run-panel ${run.status}`} aria-label="AI Skill Run 执行过程">
     <header>
       <div><strong>AI Skill Run</strong><small>{run.runId ?? "正在创建"} · {run.status}</small></div>
       {run.status === "queued" || run.status === "running" ? <Icon name="progress_activity" /> : <Icon name={run.status === "completed" ? "check_circle" : "error"} />}
     </header>
-    <div className="scenario-ai-run-content">
-      <section className="scenario-ai-model-output">
-        <strong>AI 生成文本</strong>
-        <pre>{run.modelText || "等待模型输出..."}</pre>
-      </section>
-      <section className="scenario-ai-timeline">
-        <strong>最新工具调用链路</strong>
-        {latestChain.length === 0 ? <p>等待后端事件...</p> : <div className="scenario-ai-chain">{latestChain.map((event, index) => <article className={aiRunEventClass(event, index === latestChain.length - 1 ? " is-current" : "")} key={`chain-${event.id ?? event.sequence ?? index}-${event.event}`}>
-          <Icon name={aiRunEventIcon(event)} />
-          <span><b>{aiRunEventTitle(event)}</b><small>{aiRunEventMeta(event)}</small></span>
-        </article>)}</div>}
-        {latestHistory.length > 0 && <>
-          <div className="scenario-ai-history-title"><strong>事件历史</strong><small>最新在上</small></div>
-          <div className="scenario-ai-history">{latestHistory.map((event, index) => <article className={aiRunEventClass(event)} key={`history-${event.id ?? event.sequence ?? index}-${event.event}`}>
-            <Icon name={aiRunEventIcon(event)} />
-            <span><b>{aiRunEventTitle(event)}</b><small>{aiRunEventMeta(event)}</small></span>
-          </article>)}</div>
-        </>}
+    <div className="scenario-ai-run-content merged">
+      <section className="scenario-ai-stream-output">
+        <div className="scenario-ai-stream-head"><strong>AI 流式输出</strong>{latestEntry && <small>最新：{latestEntry.title}</small>}</div>
+        {entries.length === 0 ? <p>等待后端返回...</p> : <div className="scenario-ai-stream" ref={streamRef}>{entries.map((entry, index) => {
+          const isLatest = index === entries.length - 1;
+          return <article className={aiRunEventClass(entry.event, isLatest ? " is-current" : "")} key={`stream-${entry.event.id ?? entry.event.sequence ?? index}-${entry.event.event}-${index}`}>
+            <Icon name={aiRunEventIcon(entry.event)} />
+            <span><b>{entry.title}</b><small>{entry.meta}</small>{entry.body && <pre>{entry.body}</pre>}</span>
+          </article>;
+        })}</div>}
       </section>
     </div>
     {run.errorMessage && <p className="scenario-inline-error">{run.errorMessage}</p>}
@@ -1823,27 +1865,7 @@ function DesignTab({ debuggingStepId, draft, latestRun, liveProgress, moveStep, 
             : liveStatus === "skipped"
               ? " flow-skipped"
               : " flow-pending";
-    const previousStatus = liveProgress?.stepStatuses[index - 1];
-    const connectorState = !liveProgress
-      ? ""
-      : index === liveProgress.transitionTargetIndex || index === liveProgress.currentStepIndex
-        ? " flow-active"
-        : previousStatus === "passed"
-          ? " flow-complete"
-          : previousStatus === "failed" || previousStatus === "timeout"
-            ? " flow-failed"
-            : " flow-pending";
-    return <div className={`${incoming.length ? "scenario-step-wrap has-bindings" : "scenario-step-wrap"}${runState}`} key={step.id}>
-    {index > 0 && <div className={`${incoming.length ? "scenario-connector has-bindings" : "scenario-connector"}${connectorState}`}>
-      <div aria-hidden="true" className="scenario-connector-track">
-        <span className="scenario-connector-port source" />
-        <span className="scenario-connector-line" />
-        <span className="scenario-flow-pulse primary" />
-        <span className="scenario-flow-pulse secondary" />
-        <span className="scenario-connector-port target"><Icon name="arrow_downward" /></span>
-      </div>
-      {incoming.length > 0 && <div className="scenario-connector-bindings"><Icon name="account_tree" /><span><b>{incoming.length} 条数据引用</b><small>进入步骤 {index + 1}</small></span><span className="scenario-connector-sources">{[...new Set(incoming.map((link) => link.sourceStepNumber))].map((stepNumber) => <i key={stepNumber}>步骤 {stepNumber}</i>)}</span></div>}
-    </div>}
+    return <div className={`scenario-step-wrap${runState}`} key={step.id}>
     <article className={`${selectedStepId === step.id ? "scenario-step-card active" : "scenario-step-card"}${runState}${debugState}`} onClick={() => onSelect(step.id)}>
       <b className="scenario-step-index">{index + 1}</b><span className={`scenario-method ${step.kind}`}>{step.method}</span>
       <div className="scenario-step-main"><strong>{step.name}</strong><small>{step.path || "无附加说明"}</small></div>
@@ -1856,22 +1878,51 @@ function DesignTab({ debuggingStepId, draft, latestRun, liveProgress, moveStep, 
     </article>
   </div>;
   };
+  const renderNodeConnector = (mainStep: ScenarioStep, nodeIndex: number) => {
+    if (nodeIndex <= 0) return null;
+    const index = draft.steps.findIndex((item) => item.id === mainStep.id);
+    const previousMainIndex = draft.steps.findIndex((item) => item.id === mainSteps[nodeIndex - 1].id);
+    const connectorLinks = links.filter((link) => link.targetStep.nodeId === mainStep.nodeId && link.sourceStep.nodeId !== mainStep.nodeId);
+    const previousStatus = liveProgress?.stepStatuses[previousMainIndex];
+    const connectorState = !liveProgress
+      ? ""
+      : index === liveProgress.transitionTargetIndex || index === liveProgress.currentStepIndex
+        ? " flow-active"
+        : previousStatus === "passed"
+          ? " flow-complete"
+          : previousStatus === "failed" || previousStatus === "timeout"
+            ? " flow-failed"
+            : " flow-pending";
+    return <div className={`${connectorLinks.length ? "scenario-node-connector has-bindings" : "scenario-node-connector"}${connectorState}`} aria-label={`测试用例节点 ${nodeIndex} 至测试用例节点 ${nodeIndex + 1} 的连线`}>
+      <div aria-hidden="true" className="scenario-connector-track">
+        <span className="scenario-connector-port source" />
+        <span className="scenario-connector-line" />
+        <span className="scenario-flow-pulse primary" />
+        <span className="scenario-flow-pulse secondary" />
+        <span className="scenario-connector-port target"><Icon name="arrow_downward" /></span>
+      </div>
+      {connectorLinks.length > 0 && <div className="scenario-connector-bindings"><Icon name="account_tree" /><span><b>{connectorLinks.length} 条跨节点引用</b><small>进入测试用例节点 {nodeIndex + 1}</small></span><span className="scenario-connector-sources">{[...new Set(connectorLinks.map((link) => link.sourceStepNumber))].map((stepNumber) => <i key={stepNumber}>步骤 {stepNumber}</i>)}</span></div>}
+    </div>;
+  };
   return <div className="scenario-step-lane">
     {mainSteps.length === 0 && <button className="scenario-phase-empty" onClick={() => onAddAction(undefined, "main")} type="button"><Icon name="add_circle" /><span><strong>尚未添加主测试用例</strong><small>从项目测试用例中选择 API 或 WebSocket 用例</small></span></button>}
     {mainSteps.map((mainStep, nodeIndex) => {
       const beforeActions = draft.steps.filter((step) => step.nodeId === mainStep.nodeId && step.actionPosition === "before");
       const afterActions = draft.steps.filter((step) => step.nodeId === mainStep.nodeId && step.actionPosition === "after");
-      return <section className="scenario-case-node" key={mainStep.nodeId}>
+      return <Fragment key={mainStep.nodeId}>
+      {renderNodeConnector(mainStep, nodeIndex)}
+      <section className="scenario-case-node">
         <header className="scenario-case-node-head"><span>测试用例节点 {nodeIndex + 1}</span><strong>{mainStep.name}</strong></header>
-        {beforeActions.length > 0 && <div className="scenario-node-actions before">{beforeActions.map(renderStep)}</div>}
+        {beforeActions.length > 0 && <div className="scenario-node-actions before">{beforeActions.map((step) => renderStep(step))}</div>}
         {renderStep(mainStep)}
         <div className="scenario-node-action-bar">
           <button onClick={() => onAddAction(mainStep.nodeId, "before")} type="button"><Icon name="add" />添加前置动作</button>
           <span>动作仅绑定当前测试用例</span>
           <button onClick={() => onAddAction(mainStep.nodeId, "after")} type="button"><Icon name="add" />添加后置动作</button>
         </div>
-        {afterActions.length > 0 && <div className="scenario-node-actions after">{afterActions.map(renderStep)}</div>}
-      </section>;
+        {afterActions.length > 0 && <div className="scenario-node-actions after">{afterActions.map((step) => renderStep(step))}</div>}
+      </section>
+      </Fragment>;
     })}
   </div>;
 }

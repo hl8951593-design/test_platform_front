@@ -247,7 +247,7 @@ POST /api/v1/ai/skills/scenario-composer/runs
 }
 ```
 
-`scenario-composer` 只返回 `ScenarioCreateRequest` 兼容草稿，不直接保存；前端在运行中展示 `model.delta` 累加文本和 `tool.*` / `step.*` 执行轨迹，完成后先展示 AI 生成结果预览，用户确认后再调用场景创建接口。`execute_candidates` 默认关闭，开启时前端必须提示真实调用接口的副作用风险并要求二次确认。
+`scenario-composer` 只返回 `ScenarioCreateRequest` 兼容草稿，不直接保存；前端在运行中把 `model.delta` 累加文本和 `tool.*` / `step.*` / `run.*` 执行轨迹合并为单一流式输出，并自动展示最新返回内容，完成后先展示 AI 生成结果预览，用户确认后再调用场景创建接口。`execute_candidates` 默认关闭，开启时前端必须提示真实调用接口的副作用风险并要求二次确认。
 
 ## WebSocket 测试用例 AI 接口
 

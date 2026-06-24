@@ -78,6 +78,21 @@ describe("AI skill runs API", () => {
     expect((init?.headers as Headers).get("Last-Event-ID")).toBe("1");
   });
 
+  it("normalizes SSE payloads that carry the event name in data", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(streamResponse([
+      'id: 4\ndata: {"event":"tool.started","payload":{"name":"validate_unsaved_scenario"}}\n\n',
+      'id: 5\ndata: {"type":"model.delta","payload":{"content":"with tool output"}}\n\n',
+    ]));
+    const events: string[] = [];
+
+    await subscribeAiSkillRunEvents("ai-run-1", (event) => events.push(`${event.sequence}:${event.event}:${event.payload.name ?? event.payload.content}`));
+
+    expect(events).toEqual([
+      "4:tool.started:validate_unsaved_scenario",
+      "5:model.delta:with tool output",
+    ]);
+  });
+
   it("maps a completed AI skill run snapshot", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse({
       run_id: "ai-run-1",
