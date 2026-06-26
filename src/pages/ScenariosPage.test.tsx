@@ -344,6 +344,7 @@ describe("ScenariosPage", () => {
     expect(screen.queryByText("高级配置 JSON")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("步骤配置 JSON")).not.toBeInTheDocument();
     expect(screen.getByText("随机值生成")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "展开后置动作" }));
     expect(screen.getByText("后置 · 始终执行")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "保存场景" }));
 
@@ -471,6 +472,56 @@ describe("ScenariosPage", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "添加后置动作" }));
     expect(screen.getByRole("dialog", { name: "添加后置动作" })).toBeInTheDocument();
+  });
+
+  it("keeps attached actions out of the test-case node numbering", async () => {
+    mockAssets();
+    render(<ScenariosPage environmentId={1} environments={environments} onAction={vi.fn()} projectId={8} />);
+
+    fireEvent.click(screen.getByTitle("新建场景"));
+    await addMainAction(/登录接口/);
+    await addAttachedAction(/登录接口/, "前置");
+    await addAttachedAction(/消息订阅/, "后置");
+    await addMainAction(/消息订阅/);
+
+    const nodes = Array.from(document.querySelectorAll(".scenario-case-node")) as HTMLElement[];
+    expect(nodes).toHaveLength(2);
+    expect(within(nodes[0]).getByText("测试用例节点 1")).toBeInTheDocument();
+    expect(within(nodes[1]).getByText("测试用例节点 2")).toBeInTheDocument();
+    expect(Array.from(nodes[0].querySelectorAll(".scenario-step-index")).map((item) => item.textContent)).toEqual(["1"]);
+    fireEvent.click(within(nodes[0]).getByRole("button", { name: "展开前置动作" }));
+    fireEvent.click(within(nodes[0]).getByRole("button", { name: "展开后置动作" }));
+    expect(Array.from(nodes[0].querySelectorAll(".scenario-step-index")).map((item) => item.textContent)).toEqual(["1", "前1", "后1"]);
+    expect(Array.from(nodes[1].querySelectorAll(".scenario-step-index")).map((item) => item.textContent)).toEqual(["2"]);
+  });
+
+  it("summarizes crowded attached action groups inside a test-case node", async () => {
+    mockAssets();
+    render(<ScenariosPage environmentId={1} environments={environments} onAction={vi.fn()} projectId={8} />);
+
+    fireEvent.click(screen.getByTitle("新建场景"));
+    await addMainAction(/登录接口/);
+    await addAttachedAction(/生成随机值/);
+    await addAttachedAction(/设置固定值/);
+    await addAttachedAction(/执行脚本/);
+    const mainCard = document.querySelector(".scenario-case-node > .scenario-step-wrap > .scenario-step-card:not(.attached-action)") as HTMLElement;
+    fireEvent.click(mainCard);
+
+    let group = document.querySelector(".scenario-action-group.before") as HTMLElement;
+    expect(group).toHaveTextContent("前置动作");
+    expect(group).toHaveTextContent("3 个动作");
+    expect(group).toHaveTextContent("未执行 3");
+    expect(within(group).queryByText("生成随机值")).not.toBeInTheDocument();
+    expect(within(group).queryByText("执行脚本")).not.toBeInTheDocument();
+
+    fireEvent.click(within(group).getByRole("button", { name: "展开前置动作" }));
+    group = document.querySelector(".scenario-action-group.before") as HTMLElement;
+    expect(within(group).getByText("生成随机值")).toBeInTheDocument();
+    expect(within(group).getByText("执行脚本")).toBeInTheDocument();
+
+    fireEvent.click(within(group).getByRole("button", { name: "收起前置动作" }));
+    group = document.querySelector(".scenario-action-group.before") as HTMLElement;
+    expect(within(group).queryByText("执行脚本")).not.toBeInTheDocument();
   });
 
   it("supports step ordering and server-backed datasets", async () => {
@@ -818,7 +869,7 @@ describe("ScenariosPage", () => {
       emitEvent({ event: "transition_started", sourceStepIndex: 0, targetStepIndex: 1, sequence: 3 });
     });
     await waitFor(() => {
-      const activeConnector = document.querySelector(".scenario-connector.flow-active");
+      const activeConnector = document.querySelector(".scenario-node-connector.flow-active");
       expect(activeConnector).toBeInTheDocument();
       expect(activeConnector?.querySelector(".scenario-connector-track")).toBeInTheDocument();
       expect(activeConnector?.querySelectorAll(".scenario-flow-pulse")).toHaveLength(2);
@@ -827,7 +878,7 @@ describe("ScenariosPage", () => {
     act(() => emitEvent({ event: "step_started", stepIndex: 1, stepId: "STEP-2", status: "running", sequence: 4 }));
     await waitFor(() => {
       expect(document.querySelector(".scenario-step-card.flow-running")).toHaveTextContent("Step 2");
-      expect(document.querySelector(".scenario-connector.flow-active")).toBeInTheDocument();
+      expect(document.querySelector(".scenario-node-connector.flow-active")).toBeInTheDocument();
     });
 
     api.runsByProject.set(7, [{ ...running, status: "passed", finishedAt: "2026-06-12T00:00:01Z", durationMs: 1000 }]);
@@ -1291,6 +1342,104 @@ describe("ScenariosPage", () => {
         expect.objectContaining({ configText: expect.stringContaining('"target_path": "company_id"') }),
       ]),
     })));
+  });
+
+  it("resolves response extraction path templates from previous action outputs", async () => {
+    const fetchMock = mockAssets();
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        code: 0,
+        data: {
+          status: "passed",
+          duration_ms: 64,
+          response_snapshot: {
+            status_code: 200,
+            json: {
+              data: {
+                items: [{ company_id: 9527 }],
+              },
+            },
+          },
+        },
+      }),
+    } as Response);
+    const scenario = {
+      id: "SCENARIO-PATH-TEMPLATE",
+      projectId: 7,
+      version: 1,
+      name: "路径变量场景",
+      description: "",
+      environmentId: 1,
+      tags: [],
+      datasets: [{ id: "DATA-1", name: "默认数据", enabled: true, variablesText: "{}" }],
+      createdAt: "2026-06-11T10:00:00Z",
+      updatedAt: "2026-06-11T10:00:00Z",
+      steps: [{
+        id: "STEP-RANDOM",
+        kind: "random",
+        name: "生成列表下标",
+        method: "RNG",
+        path: "生成整数并写入变量",
+        continueOnFailure: false,
+        nodeId: "NODE-1",
+        actionPosition: "before",
+        configText: JSON.stringify({ type: "integer", min: 0, max: 9, output: "rowIndex" }),
+      }, {
+        id: "STEP-LIST",
+        kind: "api_case",
+        referenceId: 10,
+        name: "获取企业列表",
+        method: "POST",
+        path: "/companies",
+        continueOnFailure: false,
+        nodeId: "NODE-1",
+        actionPosition: "main",
+        configText: JSON.stringify({
+          _scenario_context: {
+            extractions: [{ id: "VAR-COMPANY", name: "companyId", path: "data.items.{{rowIndex}}.company_id" }],
+            bindings: [],
+          },
+        }),
+      }],
+    };
+    api.scenariosByProject.set(7, [scenario]);
+    api.runsByProject.set(7, [{
+      id: "RUN-PATH-TEMPLATE",
+      scenarioId: scenario.id,
+      scenarioName: scenario.name,
+      projectId: 7,
+      environmentId: 1,
+      datasetName: "默认数据",
+      status: "passed",
+      startedAt: "2026-06-11T10:10:00Z",
+      durationMs: 180,
+      stepResults: [{
+        stepId: "STEP-RANDOM",
+        name: "生成列表下标",
+        status: "passed",
+        durationMs: 5,
+        extractedVariables: [{ extractionId: "OUT-ROW", name: "rowIndex", path: "rowIndex", value: 0, masked: false }],
+        resolvedBindings: [],
+      }],
+    }]);
+
+    render(<ScenariosPage environmentId={1} environments={environments} onAction={vi.fn()} projectId={7} />);
+    fireEvent.click(await screen.findByRole("button", { name: /路径变量场景/ }));
+    const mainCard = await waitFor(() => {
+      const card = Array.from(document.querySelectorAll(".scenario-step-card"))
+        .find((item) => item.textContent?.includes("获取企业列表")) as HTMLElement | undefined;
+      expect(card).toBeInTheDocument();
+      return card as HTMLElement;
+    });
+    fireEvent.click(mainCard);
+    fireEvent.click(within(mainCard).getByTitle("单独执行步骤"));
+
+    const extractionSection = screen.getByText("响应取值").closest("section") as HTMLElement;
+    await waitFor(() => expect(extractionSection).toHaveTextContent("9527"));
+    expect(extractionSection).toHaveTextContent("本次调试取值");
+    expect(extractionSection).not.toHaveTextContent("路径变量未解析");
+    expect(extractionSection).not.toHaveTextContent("响应路径不存在");
   });
 
   it("shows variable relationships and runtime values across the canvas and inspector", async () => {

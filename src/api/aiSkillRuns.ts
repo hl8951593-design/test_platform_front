@@ -6,7 +6,7 @@ export interface AiSkillRunCreatePayload<TInput = unknown> {
   operation: string;
   project_id: number;
   environment_id?: number;
-  source_id?: number;
+  source_id?: string | number;
   input: TInput;
 }
 

@@ -1,25 +1,23 @@
 # 场景组合接口
 
-状态：破坏性目标契约（前端已切换，后端需同步实现）
-最后核验：2026-06-24
-
 场景将 HTTP/WebSocket 基础用例、等待和条件步骤编排为可版本化的业务流程。基础路径为
-`/api/v1`，接口使用 Bearer Token，成功响应统一为 `{code, message, data}`。
+`/api/v1`，接口使用 Bearer Token。除 SSE 事件流外，成功响应统一使用
+`{code, message, data}`，包括 HTTP 202 Accepted 异步启动响应。
 
 ## 接口
 
 | 方法 | 路径 | 权限 | 说明 |
 | --- | --- | --- | --- |
 | GET/POST | `/scenarios?project_id={id}` | `scenario:view` / `scenario:manage` | 分页查询、创建场景 |
-| GET/PUT/DELETE | `/scenarios/{scenario_id}?project_id={id}` | `scenario:view` / `scenario:manage` | 详情、更新、软删除 |
-| POST | `/scenarios/{scenario_id}/execute?project_id={id}` | `test:execute` | 返回 `202 Accepted`，创建一组异步场景运行 |
-| POST | `/scenarios/actions/script/execute-unsaved?project_id={id}` | `test:execute` | 使用当前未保存脚本配置和调试输入执行一次沙箱脚本 |
-| GET | `/scenario-runs?project_id={id}&scenario_id={id}` | `scenario:view` | 最近 200 条运行 |
+| GET/PUT/DELETE | `/scenarios/{scenario_id}?project_id={id}` | `scenario:view` / `scenario:manage` | 详情、更新、删除；被测试计划引用时拒绝删除 |
+| POST | `/scenarios/{scenario_id}/execute?project_id={id}` | `test:execute` | 异步启动场景，返回 HTTP 202 Accepted |
+| GET | `/scenario-runs?project_id={id}&scenario_id={id}` | `scenario:view` | 分页查询运行，`page_size` 最大 200 |
 | GET/DELETE | `/scenario-runs/{run_id}?project_id={id}` | `scenario:view` / `scenario:manage` | 运行和步骤详情、删除调试记录 |
-| GET | `/scenario-runs/{run_id}/events?project_id={id}` | `scenario:view` | Bearer 鉴权 SSE 事件流 |
+| GET | `/scenario-runs/{run_id}/events?project_id={id}` | `scenario:view` | SSE 实时事件和历史重放 |
 
 请求字段同时接受 snake_case 和文档注明的 camelCase 别名；响应统一使用 snake_case。
 列表响应结构为 `{items, total, page, page_size}`，`page_size` 最大为 200。
+场景列表、详情、创建和更新响应包含 `environment_id` 与 `environment_name`，前端可直接展示环境名称。
 
 ## 场景定义与版本
 
@@ -30,16 +28,35 @@
   "tags": ["P0"],
   "nodes": [
     {
-      "name": "登录",
       "id": "NODE-1",
-      "before_actions": [
-        { "id": "ACTION-1", "kind": "random", "name": "生成订单号", "config": { "type": "uuid", "output": "orderNo" }, "continue_on_failure": false }
+      "name": "登录",
+      "beforeActions": [
+        {
+          "id": "ACTION-1",
+          "kind": "fixed_value",
+          "name": "设置租户",
+          "config": {"output": "tenant_id", "value": 1001},
+          "continueOnFailure": false
+        }
       ],
-      "test_case": {
-        "id": "STEP-1", "kind": "api_case", "reference_id": 11, "name": "登录", "method": "POST", "path": "/login", "config": {}, "continue_on_failure": false
+      "testCase": {
+        "id": "STEP-1",
+        "kind": "api_case",
+        "referenceId": 11,
+        "name": "登录",
+        "method": "POST",
+        "path": "/login",
+        "config": {},
+        "continueOnFailure": false
       },
-      "after_actions": [
-        { "id": "ACTION-2", "kind": "script", "name": "清理登录态", "config": { "language": "python", "code": "result = {}", "inputs": ["token"], "outputs": ["result"], "timeout_ms": 10000 }, "continue_on_failure": true }
+      "afterActions": [
+        {
+          "id": "ACTION-2",
+          "kind": "delay",
+          "name": "等待状态稳定",
+          "config": {"duration_ms": 1000},
+          "continueOnFailure": true
+        }
       ]
     }
   ],
@@ -48,20 +65,37 @@
       "id": "DATA-1",
       "name": "普通用户",
       "enabled": true,
-      "variables": {
-        "tenant_id": 1001
-      },
+      "variablesText": "{\"username\":\"tester\"}",
       "records": [
         {
           "id": "RECORD-1",
-          "name": "正常用户",
+          "name": "VIP customer",
           "enabled": true,
           "request_overrides": [
             {
-              "step_id": "STEP-1",
+              "step_id": "STEP-CREATE-ORDER",
               "target": "body",
-              "path": "account.profile.name",
-              "value": "tester"
+              "path": "order.customer.profile.level",
+              "value": "VIP"
+            },
+            {
+              "step_id": "STEP-CREATE-ORDER",
+              "target": "query_params",
+              "path": "dry_run",
+              "value": false
+            }
+          ]
+        },
+        {
+          "id": "RECORD-2",
+          "name": "Blocked customer",
+          "enabled": true,
+          "request_overrides": [
+            {
+              "step_id": "STEP-CREATE-ORDER",
+              "target": "body",
+              "path": "order.customer.profile.level",
+              "value": "BLOCKED"
             }
           ]
         }
@@ -71,75 +105,41 @@
 }
 ```
 
-响应中的 `environment_name` 是展示字段，前端会保存在场景模型中，并在调试记录自身未返回环境名时作为标题兜底；创建或更新场景时仍只提交 `environment_id`。
+### 节点与绑定动作
 
-### 测试用例节点与绑定动作
+`nodes[]` 是唯一编排结构。每个节点必须且只能包含一个 `test_case`，主用例仅允许
+`api_case` 或 `websocket_case`；`before_actions[]` 和 `after_actions[]` 允许
+`condition`、`delay`、`random`、`fixed_value`、`script`。后端拒绝旧的
+`steps`、`execution_phase`、`executionPhase` 和 `phase`。
 
-场景的基本编排单位改为 `nodes[]`。每个节点必须有且只有一个 `test_case`，并可包含有序的 `before_actions[]` 和 `after_actions[]`。动作的位置由容器表达，不再提交 `steps` 或 `execution_phase`。
+- 节点按数组顺序执行，节点内部固定为 `before_actions -> test_case -> after_actions`。
+- 前置动作失败且 `continue_on_failure=false` 时，跳过本节点剩余前置动作和主用例，仍执行全部后置动作。
+- 主用例失败后仍执行本节点全部后置动作；单个后置动作失败不会阻止后续后置动作。
+- 失败仍如实计入 run 终态；`continue_on_failure` 只控制是否继续，不会改写失败结果。
 
-- 执行顺序为节点顺序；单节点内部固定为 `before_actions -> test_case -> after_actions`。
-- 前置动作失败且 `continue_on_failure=false` 时跳过该节点剩余前置动作和 `test_case`，但仍进入该节点后置动作。
-- 测试用例失败后仍执行本节点全部后置动作；单个后置动作失败不阻止其余后置动作。
-- 动作仅能读取执行到当前位置时可见的场景变量，并通过 `config.output` 或 `config.outputs` 声明写入变量；JSON 值保留原始类型。
-- `kind` 第一批为 `api_case`、`websocket_case`、`condition`、`delay`、`random`、`fixed_value`、`script`。主 `test_case` 只允许前两类；其余类型用于前置或后置动作。
-- `script` 必须在后端受限沙箱执行，使用语言白名单、超时、资源限额和输入/输出变量白名单，禁止文件、进程和默认网络访问。
+动作配置：`delay.duration_ms` 为非负整数；`random.type` 支持 `integer`、`string`、
+`uuid`；`fixed_value.value` 保留 JSON 原始类型；`script.language` 支持 `python`、
+`javascript`。脚本在独立受限子进程执行，只暴露声明的 `inputs`，只回收声明的 `outputs`，
+并限制语言、语法、超时、输入输出大小及子进程资源。随机和固定值使用 `config.output` 写入变量，
+脚本使用 `config.outputs`。
 
-这是破坏性升级：后端不读取旧 `steps/execution_phase`，前端也不发送旧结构。已有场景必须在发布前通过一次性迁移转换为 `nodes`，无法可靠迁移的数据应阻止上线或明确清理，不能在运行时双写或猜测。
+### 未保存脚本动作调试
 
-更新请求必须携带当前 `version`。版本冲突返回 HTTP `409` 和 `current_version`。
-每次更新生成不可变的 `test_scenario_versions` 记录。场景版本保存基础用例执行快照，
-后续修改基础用例不会改变旧版本。
+| 项目 | 内容 |
+| --- | --- |
+| Canonical 接口 | `POST /api/v1/scenarios/actions/script/execute-unsaved?project_id={project_id}` |
+| 兼容接口 | `POST /api/v1/scenario-actions/script/execute-unsaved?project_id={project_id}` |
+| 认证 | `Authorization: Bearer <access_token>` |
+| 权限 | `test:execute` |
+| 说明 | 调试未保存的脚本动作，不落库，不要求 `inputs[]` 来自前置节点 |
 
-### 内置动作配置
-
-所有动作使用各自的 `config` 对象。前端提供结构化表单，
-保存时转换为以下执行配置：
-
-```json
-[
-  {
-    "kind": "condition",
-    "config": {
-      "expression": "{{orderStatus}} != 500"
-    }
-  },
-  {
-    "kind": "delay",
-    "config": {
-      "duration_ms": 5000
-    }
-  },
-  { "kind": "random", "config": { "type": "integer", "min": 1, "max": 100, "output": "randomValue" } },
-  { "kind": "fixed_value", "config": { "output": "enabled", "value": true } },
-  { "kind": "script", "config": { "language": "javascript", "code": "result = { ok: true };", "inputs": ["token"], "outputs": ["result"], "timeout_ms": 10000 } }
-  }
-]
-```
-
-- `condition.expression` 是执行器最终使用的表达式。前端常用表单支持变量、`==`、`!=`、`>`、`>=`、`<`、`<=`、文本、数字、布尔值和空值。
-- `delay.duration_ms` 是非负整数毫秒。前端允许用户按毫秒、秒或分钟输入并统一换算。
-- `random.type` 支持 `integer`、`string`、`uuid`；整数校验 `min <= max`，字符串长度必须为正整数。
-- `fixed_value.value` 接受任意 JSON 值并保留类型，`output` 必须是合法变量名。
-- `script.language` 支持 `python`、`javascript`；JavaScript 运行要求服务器安装 Node.js。`code` 最大 `100 KB`，输入和输出数据分别最大 `1 MB`，`timeout_ms` 是 `1～60000` 的整数，输入和输出名称必须是对应语言的合法变量名。
-- `script.inputs[]` 中的每个变量必须在当前执行位置由前置节点提供；任一输入不可用时不执行脚本并返回 `Script inputs are unavailable`。脚本在顶层执行，不能使用顶层 `return`，而是直接给 `script.outputs[]` 声明的变量赋值；未赋值的输出为 `null`，输出值必须可转换为 JSON。
-- Python 支持变量赋值、`if/else`、`for/while`、列表/字典/元组、数值和字符串运算、下标、比较和布尔运算，以及 `abs`、`bool`、`dict`、`enumerate`、`float`、`int`、`len`、`list`、`max`、`min`、`range`、`round`、`sorted`、`str`、`sum`、`tuple`、`zip`。禁止 `import`、函数/类、`lambda`、属性访问、文件/网络/数据库、第三方库、`print`、`try/except`、`with`、`raise`、`eval/exec` 和 `__xxx__` 私有名称。
-- JavaScript 同样不能访问 Node.js 模块、文件系统或网络。前端只做即时的常见错误检查，后端必须再次执行完整语法、安全、资源和 JSON 序列化校验。
-- 历史复杂表达式必须原样返回。前端不展示原始 JSON 编辑入口；用户使用结构化表单修改后，配置转换为标准条件表达式。
-- 后端不得依赖前端专用展示字段；步骤名称和 `path` 摘要不参与条件或等待执行。
-
-### 脚本动作调试
-
-脚本动作支持在场景保存前单独调试。前端提交当前编辑器内容、声明输入输出和本次调试输入值：
-
-```http
-POST /api/v1/scenarios/actions/script/execute-unsaved?project_id=7
-```
+请求示例：
 
 ```json
 {
   "environment_id": 1,
   "language": "python",
-  "code": "result = {\"ok\": companyId != 1}",
+  "code": "if companyId != 1:\n    result = True\nelse:\n    result = False",
   "inputs": ["companyId"],
   "outputs": ["result"],
   "timeout_ms": 10000,
@@ -149,74 +149,64 @@ POST /api/v1/scenarios/actions/script/execute-unsaved?project_id=7
 }
 ```
 
-`input_values` 只用于本次调试，不写入场景版本。保存和整场运行仍要求 `inputs[]`
-来自执行位置之前已经声明的变量；调试允许用户手工提供输入值来验证脚本逻辑。
-后端必须复用正式脚本沙箱的语言白名单、禁用能力、超时、资源限额和 JSON 序列化校验。
-
-响应可以直接返回输出映射，也可以放在 `response_snapshot.outputs`、`response_snapshot.json`
-或 `outputs` 中：
+成功响应：
 
 ```json
 {
-  "status": "passed",
-  "duration_ms": 24,
-  "outputs": {
-    "result": {
-      "ok": true
-    }
-  },
-  "error_message": ""
-}
-```
-
-### AI 智能场景组合
-
-智能场景组合通过 AI skill 统一入口提供：
-
-```http
-POST /api/v1/ai/skills/scenario-composer/runs
-GET /api/v1/ai/skill-runs/{run_id}/events
-GET /api/v1/ai/skill-runs/{run_id}
-```
-
-请求体：
-
-```json
-{
-  "operation": "compose",
-  "project_id": 1,
-  "environment_id": 2,
-  "input": {
-    "requirement": "组合登录后查询用户详情的主链路",
-    "scenario_name": "用户详情主链路",
-    "http_test_case_ids": [1001, 1002],
-    "websocket_test_case_ids": [],
-    "include_bindings": true,
-    "include_assertions": true,
-    "include_hooks": true,
-    "include_datasets": false,
-    "include_latest_execution": true,
-    "execute_candidates": false,
-    "max_nodes": 10
+  "code": 0,
+  "message": "ok",
+  "data": {
+    "status": "passed",
+    "duration_ms": 22,
+    "outputs": {
+      "result": true
+    },
+    "error_message": ""
   }
 }
 ```
 
-创建 run 后前端订阅 SSE 事件，把 `model.delta` 累加文本以及 `tool.*`、`step.*`、`run.*` 执行轨迹合并展示为单一流式输出，并自动滚动到最新返回内容。`run.completed` 的 `payload.result.scenario` 是结构兼容场景创建请求的草稿，不直接保存；如果 SSE 中断，前端通过 run 快照读取最终 `result` 或 `error_message`。前端必须先展示预览，由用户检查 `warnings`、节点顺序、前后置动作、主用例 config、提取器、变量绑定和断言；用户确认后再调用 `/scenarios?project_id={id}` 保存。`execute_candidates` 默认应为 `false`，开启前需要二次确认，因为候选用例会真实执行并可能产生业务副作用。
+脚本运行失败仍返回 HTTP `200`，由 `data.status` 表示调试结果，方便前端展示调试卡：
 
-## 数据集与测试记录
+```json
+{
+  "code": 0,
+  "message": "ok",
+  "data": {
+    "status": "failed",
+    "duration_ms": 20,
+    "outputs": {},
+    "error_message": "NameError: name 'companyId' is not defined"
+  }
+}
+```
 
-一个数据集包含多条完整 `records`。数据集和记录都为启用状态时，每条记录产生一个独立 run。
-`request_overrides` 按 `step_id + target + path` 定位请求字段，`target` 支持 `path`、
-`headers`、`query_params` 和 `body`。深层 Body 路径支持对象段和数组索引。
+请求参数非法、无权限、环境不存在等调用错误仍按标准 HTTP 错误返回。正式保存和整场运行时仍校验
+`inputs[]` 必须来自前置变量；未保存调试只把 `input_values` 中已提供且在 `inputs[]`
+声明的值注入本次沙箱。
 
-标准写入结构只使用 `records[].request_overrides[].value`。兼容读取旧数据集级
-`request_overrides` 时，可把 `values[]` 的每个索引迁移为一条记录，把单个 `value`
-迁移为一条记录；新响应不得继续输出旧结构。
+这是破坏性升级。迁移 `0020_migrate_scenarios_to_nodes.py` 先按旧阶段规则稳定排序：首个
+主用例前的动作绑定到首节点前置，用例之间的动作绑定到下一节点前置，末尾动作绑定到末节点
+后置。这样旧的 `case -> condition -> case` 会保持执行和失败阻断语义。无法保持全局 teardown
+或停止边界的定义仍会阻断升级；运行时不双读、不双写、不猜测。
 
-详细覆盖顺序和校验见 `../docs/scenario-data-driven-contract.md`。
+更新请求必须携带当前 `version`。版本冲突返回 HTTP `409` 和 `current_version`。
+每次更新生成不可变的 `test_scenario_versions` 记录。场景版本保存基础用例执行快照，
+后续修改基础用例不会改变旧版本。
 
-## 执行启动
+## AI 智能场景组合
+
+智能场景组合通过 AI skill 统一入口提供：
+
+```text
+POST /api/v1/ai/skills/scenario-composer/run
+```
+
+该能力根据候选 HTTP/WebSocket 测试用例和自然语言目标生成 `ScenarioCreateRequest`
+兼容的场景草稿，不直接保存。前端应让用户确认草稿后再调用场景创建接口。详细请求和响应示例见
+`docs/api_ai.md` 的 `scenario-composer` 说明。
+
+## 数据集选择
 
 执行请求：
 
@@ -236,74 +226,80 @@ GET /api/v1/ai/skill-runs/{run_id}
 - 场景完全没有数据集且未传 `datasetIds`：以空变量执行一次。
 - 指定不存在的数据集：返回 HTTP `400`。
 
-成功返回 `202 Accepted`：
+## 数据驱动请求覆盖
 
-```json
-{
-  "execution_id": "SCENARIO-EXEC-1",
-  "scenario_id": "SCENARIO-1",
-  "scenario_version": 9,
-  "status": "queued",
-  "created_at": "2026-06-15T08:00:00.000Z",
-  "runs": [
-    {
-      "run_id": "RUN-1",
-      "dataset_id": "DATA-1",
-      "dataset_name": "普通用户",
-      "record_id": "RECORD-1",
-      "record_name": "正常用户",
-      "status": "queued",
-      "events_url": "/api/v1/scenario-runs/RUN-1/events?project_id=7",
-      "detail_url": "/api/v1/scenario-runs/RUN-1?project_id=7"
-    }
-  ]
-}
-```
+数据集通过 `records` 描述完整测试输入。默认选择数据集时，dataset 和 record 均启用才会
+执行；显式 `datasetIds` 仍可选择已停用数据集，但选中数据集内只执行 `enabled=true` 的
+record。每条 record 生成一个独立场景 run。record 的 `request_overrides` 只修改该次运行
+的步骤请求副本，不会修改场景版本保存的步骤快照。
 
-`dataset_id`、`record_id` 和 `record_name` 是多记录数据驱动的必需运行身份字段。
-前端会在启动响应、事件、运行列表和详情中映射这些字段，并以“数据集 · 测试记录”
-切换画布和展示调试历史。`record_name` 缺失时回退显示稳定的 `record_id`；后端不能
-只返回数据集名称，否则同一数据集内的不同输入无法精确审计。
+支持的 target：
 
-事件顺序、重连和详情字段见：
+- `path`：替换完整请求路径，`path` 字段必须为空字符串。
+- `headers`：按 `path` 指定的请求头名称覆盖值。
+- `query_params`：按 `path` 指定的查询参数名称覆盖值，仅 API 步骤支持。
+- `body`：覆盖嵌套 JSON 字段，仅 API 步骤支持；支持点路径和数组索引，
+  例如 `orders[0].items[2].sku`。
 
-节点内动作事件及运行详情必须返回 `node_id`、`action_id`、`action_position`（`before|main|after`）和 `action_index`；`step_id/step_index` 可继续作为整次运行的扁平定位，但不能代替节点归属字段。
+`value` 保留 JSON 类型，包括字符串、数字、布尔值、`null`、对象和数组。执行时先复制
+步骤请求并应用 override，再解析数据集变量、上游步骤变量和环境变量，因此 override 的
+value 也可以包含 `{{variable}}` 模板。
 
-- `../docs/scenario-run-events-contract.md`
-- `../docs/scenario-run-detail-contract.md`
-- `../docs/scenario-variable-tracing-contract.md`
+保存或执行时遇到无效 record 或 override 返回 HTTP `400`。错误数据包含
+`dataset_id`、`record_id`、`step_id`、`target` 和 `path`，用于前端定位字段。
+以下情况会被拒绝：
 
-前端消费事件流时会携带 `Last-Event-ID` 自动重连，并按 `run_id + sequence`
-去重。事件序号出现缺口或接口返回 `409 EVENT_HISTORY_EXPIRED` 时，前端会读取
-`detail_url` 对应的运行详情校准画布。历史过期错误既可以直接返回，也可以放在
-平台统一响应包裹的 `data` 字段中。
+- record 缺少 `id` 或 `name`，或同一 dataset 内 record ID 重复。
+- `step_id` 不属于当前场景版本。
+- target 不受步骤类型支持。
+- body 路径不存在、穿过标量，或数组索引无效。
+- `target=path` 但字段路径非空。
+- 同一 record 存在相同 `step_id + target + path`。
+
+完整覆盖顺序见 [场景数据驱动契约](scenario-data-driven-contract.md)。
+
+兼容规则：
+
+- 旧的 dataset-level `request_overrides` 会兼容读取并迁移为 record。
+- 旧 override 的 `values` 数组按索引展开为多条 record；单个 `value` 生成一条 record。
+- 数组请求值必须直接放在 `value` 中，例如 `"value": [1, 2]`，不会被拆成多条 record。
+- 新的保存结果和详情响应统一使用 `records`。
 
 ## 环境与幂等
 
 执行环境必须属于当前项目且未删除。没有传执行环境时使用场景绑定环境。
 
-幂等键作用域为当前项目，当前实现不自动过期。每个数据集派生独立键。同一键和相同请求返回
-原运行；同一键对应不同场景版本、环境、数据集或计划运行时返回 HTTP `409`。
+手工异步执行的幂等键作用域为当前项目，当前实现不自动过期。同一键和相同场景版本、
+环境及数据集选择返回原 execution 和全部 run；同一键用于不同请求时返回 HTTP `409`。
+测试计划内部按每个数据集和 record 派生 run 幂等键。
 
 ## 状态与审计
 
-场景运行状态包括 `running`、`passed`、`failed`、`timeout`。步骤还可能为 `skipped`。
+execution 和场景运行状态包括 `queued`、`running`、`passed`、`failed`、`timeout`；
+步骤包括 `pending`、`running`、`passed`、`failed`、`timeout`、`skipped`。
 关联链如下：
 
 ```text
+test_scenario_executions
+  -> test_scenario_runs.execution_id
+     -> test_scenario_run_events.run_id
 test_plan_runs
   -> test_scenario_runs.plan_run_id
      -> test_case_executions.scenario_run_id
      -> websocket_test_case_executions.scenario_run_id
 ```
 
-场景快照和变量快照对敏感字段进行掩码。场景版本中的 Authorization、Cookie、Token、
-Password、Secret、API Key 等字段使用 `SNAPSHOT_ENCRYPTION_KEY` 加密保存；未配置时使用
-`JWT_SECRET_KEY` 派生密钥。生产环境必须配置独立且稳定的加密密钥。
+场景快照和变量快照对已识别的敏感字段进行掩码。场景版本请求快照中的 Authorization、
+Cookie、Token、Password、Secret、API Key 等字段使用 `SNAPSHOT_ENCRYPTION_KEY` 加密保存；
+未配置时使用 `JWT_SECRET_KEY` 派生密钥。生产环境必须配置独立且稳定的加密密钥。
+
+`request_overrides[].value` 是通用 JSON 字段，当前不会根据 override 的 header/path 名称
+自动判断是否需要字段级加密。敏感覆盖值应使用模板引用环境密钥，不应把密钥明文直接写入
+record。运行详情中的最终请求仍按实际请求字段执行脱敏。
 
 ## 错误响应
 
-HTTP 和参数校验错误统一返回：
+业务校验错误返回 HTTP `400` 或 `409`；Pydantic 请求结构校验返回 HTTP `422`。错误体均使用：
 
 ```json
 {
@@ -312,3 +308,111 @@ HTTP 和参数校验错误统一返回：
   "data": "幂等键已用于不同的场景执行请求"
 }
 ```
+
+同一项目内场景名称唯一。创建或重命名为已存在名称时返回 HTTP `409`，`message` 和
+`data` 为“同一项目下场景名称不能重复”；数据库唯一键在 flush 或 commit 阶段发生竞态时
+也转换为同一业务响应，不返回 500。
+
+结构化 `data` 会保留 record 和 override 字段定位信息。完整公共规则见
+[统一错误响应契约](api_errors.md)。
+
+## 实时执行
+
+`POST /scenarios/{scenario_id}/execute?project_id={id}` 现在返回 HTTP `202`。
+响应不再等待场景执行结束，而是直接返回 `execution_id`、场景版本以及每个数据集
+record 对应的 `run_id`、`events_url` 和 `detail_url`。同一个 `idempotency_key` 会返回原
+execution 和 run，不会重复启动任务。
+
+响应示例（外层统一响应中的 `data`）：
+
+```json
+{
+  "execution_id": "550e8400-e29b-41d4-a716-446655440000",
+  "scenario_id": 12,
+  "scenario_version": 9,
+  "status": "queued",
+  "created_at": "2026-06-12T08:00:00.000Z",
+  "runs": [
+    {
+      "run_id": 301,
+      "dataset_id": "DATA-1",
+      "dataset_name": "普通用户",
+      "record_id": "RECORD-1",
+      "record_name": "VIP customer",
+      "status": "queued",
+      "events_url": "/api/v1/scenario-runs/301/events?project_id=1",
+      "detail_url": "/api/v1/scenario-runs/301?project_id=1"
+    }
+  ]
+}
+```
+
+前端通过以下接口订阅单个 run：
+
+```http
+GET /scenario-runs/{run_id}/events?project_id={id}
+Accept: text/event-stream
+Last-Event-ID: 12
+```
+
+响应头包含：
+
+```http
+Content-Type: text/event-stream
+Cache-Control: no-cache, no-transform
+Connection: keep-alive
+X-Accel-Buffering: no
+```
+
+事件已在发送前持久化，`sequence` 在单个 run 内严格递增。支持的事件为
+`run_queued`、`run_started`、`step_started`、`step_completed`、
+`step_failed`、`step_skipped`、`transition_started`、`run_completed`
+、`run_failed` 和 `heartbeat`。断线重连时服务端重放所有大于
+`Last-Event-ID` 的事件。客户端应使用 `run_id + sequence` 去重。
+
+`GET /scenario-runs/{run_id}` 在执行期间仍可查询，并返回 `current_step_id`、
+`current_step_index`、`last_event_sequence` 以及包含 pending/running 状态的
+`step_results`。完整请求、响应、断言、变量提取和绑定信息仍以该详情接口为准。
+事件、详情和变量追踪字段分别见 [运行事件契约](scenario-run-events-contract.md)、
+[运行详情契约](scenario-run-detail-contract.md) 和
+[变量追踪契约](scenario-variable-tracing-contract.md)。
+
+## 数据表与迁移
+
+实时执行由迁移 `0015_add_scenario_realtime_events.py` 引入；record 运行身份由
+`0016_add_scenario_run_records.py` 引入；破坏性节点定义迁移由
+`0020_migrate_scenarios_to_nodes.py` 引入：
+
+| 表/字段 | 用途 |
+| --- | --- |
+| `test_scenario_executions` | 一次启动请求及其幂等、场景版本和总状态 |
+| `test_scenario_runs.execution_id` | 将数据集 run 归入同一次 execution |
+| `test_scenario_runs.record_id/name` | 标识同一数据集内产生该 run 的 record |
+| `test_scenario_runs.current_step_id/index` | 运行中快照 |
+| `test_scenario_runs.last_event_sequence` | 最近持久化事件序号 |
+| `test_scenario_run_events` | SSE 历史、重放和心跳 |
+
+部署新代码前必须执行：
+
+```powershell
+.\.venv\Scripts\python.exe -m alembic upgrade head
+```
+
+可使用以下命令验证：
+
+```powershell
+.\.venv\Scripts\python.exe -m alembic current
+```
+
+场景执行至少依赖 `0020_scenario_nodes`，当前全局 head 以 [文档索引与维护规范](README.md) 为准。如果未完成 0015/0016，启动执行时会出现
+`Table '...test_scenario_executions' doesn't exist` 或缺少 `record_id`、`record_name`
+字段的数据库错误；如果 0020 遇到不能可靠迁移的旧定义会主动中止，必须先人工转换或清理。
+
+## 当前限制
+
+- 后台执行当前使用 FastAPI `BackgroundTasks`，任务记录已持久化，但 API 进程异常退出后
+  不会自动被其他实例领取。
+- 尚未提供取消接口、手工重试、失败步骤恢复和项目级并发限制。
+- 事件当前随运行详情保留，尚未实现事件归档、过期清理和
+  `EVENT_HISTORY_EXPIRED` 响应。
+- SSE 不发送完整请求或响应正文；大字段必须从运行详情和关联用例执行记录读取。

@@ -1,4 +1,4 @@
-﻿import { useCallback, useEffect, useMemo, useState } from "react";
+﻿import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from "react";
 import { Fragment, lazy, Suspense, useRef, type ReactNode } from "react";
 import {
   executeUnsavedTestCase,
@@ -107,6 +107,21 @@ function orderScenarioSteps(steps: ScenarioStep[]) {
   return nodeOrder.flatMap((nodeId) => steps
     .filter((step) => step.nodeId === nodeId)
     .sort((left, right) => scenarioPositionOrder[left.actionPosition] - scenarioPositionOrder[right.actionPosition]));
+}
+
+function scenarioStepNodeNumber(steps: ScenarioStep[], step: ScenarioStep) {
+  const mainSteps = steps.filter((item) => item.actionPosition === "main");
+  const nodeIndex = mainSteps.findIndex((item) => item.nodeId === step.nodeId);
+  if (nodeIndex >= 0) return nodeIndex + 1;
+  const fallbackIndex = steps.findIndex((item) => item.id === step.id);
+  return fallbackIndex >= 0 ? fallbackIndex + 1 : 1;
+}
+
+function scenarioCanvasStepBadge(steps: ScenarioStep[], step: ScenarioStep) {
+  if (step.actionPosition === "main") return String(scenarioStepNodeNumber(steps, step));
+  const nodeActions = steps.filter((item) => item.nodeId === step.nodeId && item.actionPosition === step.actionPosition);
+  const actionIndex = nodeActions.findIndex((item) => item.id === step.id);
+  return `${scenarioPositionLabels[step.actionPosition].slice(0, 1)}${Math.max(0, actionIndex) + 1}`;
 }
 
 function scenarioRunDataset(
@@ -1500,9 +1515,12 @@ function ScenarioComposerRunPanel({ run }: { run: ScenarioComposerRunState }) {
   const streamRef = useRef<HTMLDivElement | null>(null);
   const entries = aiRunStreamEntries(run.timeline);
   const latestEntry = entries[entries.length - 1];
-  useEffect(() => {
+  useLayoutEffect(() => {
     const element = streamRef.current;
-    if (element) element.scrollTop = element.scrollHeight;
+    if (!element) return;
+    element.scrollTop = element.scrollHeight;
+    const latestBody = element.querySelector<HTMLElement>("article.is-current pre");
+    if (latestBody) latestBody.scrollTop = latestBody.scrollHeight;
   }, [entries.length, latestEntry?.body]);
   return <section className={`scenario-ai-run-panel ${run.status}`} aria-label="AI Skill Run 执行过程">
     <header>
@@ -1697,7 +1715,7 @@ interface ScenarioBindingLink {
 }
 
 function scenarioBindingLinks(steps: ScenarioStep[]) {
-  return steps.flatMap((targetStep, targetIndex) => readScenarioContext(targetStep.configText).bindings.flatMap((binding) => {
+  return steps.flatMap((targetStep) => readScenarioContext(targetStep.configText).bindings.flatMap((binding) => {
     const sourceIndex = steps.findIndex((step) => step.id === binding.sourceStepId);
     if (sourceIndex < 0) return [];
     const sourceStep = steps[sourceIndex];
@@ -1707,9 +1725,9 @@ function scenarioBindingLinks(steps: ScenarioStep[]) {
       binding,
       extraction,
       sourceStep,
-      sourceStepNumber: sourceIndex + 1,
+      sourceStepNumber: scenarioStepNodeNumber(steps, sourceStep),
       targetStep,
-      targetStepNumber: targetIndex + 1,
+      targetStepNumber: scenarioStepNodeNumber(steps, targetStep),
     }];
   }));
 }
@@ -1840,10 +1858,40 @@ function OutgoingReferences({ links, run, stepDebugResults }: { links: ScenarioB
 }
 
 function DesignTab({ debuggingStepId, draft, latestRun, liveProgress, moveStep, onAddAction, onExecute, onRemove, onSelect, selectedStepId, stepDebugResults }: { debuggingStepId?: string; draft: TestScenario; latestRun?: ScenarioRun; liveProgress?: ScenarioLiveProgress; moveStep: (index: number, direction: -1 | 1) => void; onAddAction: (nodeId: string | undefined, position: ScenarioActionPosition) => void; onExecute: (step: ScenarioStep) => void; onRemove: (id: string) => void; onSelect: (id: string) => void; selectedStepId?: string; stepDebugResults: Record<string, ScenarioStepDebugResult> }) {
+  const [expandedActionGroups, setExpandedActionGroups] = useState<Record<string, boolean>>({});
   const links = scenarioBindingLinks(draft.steps);
   const mainSteps = draft.steps.filter((step) => step.actionPosition === "main");
-  const renderStep = (step: ScenarioStep) => {
+  const actionState = (step: ScenarioStep) => {
     const index = draft.steps.findIndex((item) => item.id === step.id);
+    const liveStatus = liveProgress?.stepStatuses[index];
+    const debugStatus = stepDebugResults[step.id]?.status.toLowerCase();
+    const runStatus = latestRun?.stepResults.find((result) => result.stepId === step.id)?.status;
+    const rawStatus = liveProgress
+      ? index === liveProgress.currentStepIndex
+        ? "running"
+        : liveStatus || "pending"
+      : debugStatus || runStatus || "pending";
+    if (["failed", "error", "timeout", "cancelled"].includes(rawStatus)) return "failed";
+    if (rawStatus === "passed" || rawStatus === "skipped" || rawStatus === "running") return rawStatus;
+    return "pending";
+  };
+  const actionStateSummary = (actions: ScenarioStep[]) => {
+    const counts = actions.reduce<Record<string, number>>((summary, step) => {
+      const state = actionState(step);
+      summary[state] = (summary[state] || 0) + 1;
+      return summary;
+    }, {});
+    return [
+      { key: "failed", label: "失败" },
+      { key: "running", label: "执行中" },
+      { key: "passed", label: "通过" },
+      { key: "skipped", label: "跳过" },
+      { key: "pending", label: "未执行" },
+    ].filter((item) => counts[item.key]).map((item) => ({ ...item, count: counts[item.key] })).slice(0, 3);
+  };
+  const renderStep = (step: ScenarioStep, attachments?: ReactNode) => {
+    const index = draft.steps.findIndex((item) => item.id === step.id);
+    const badge = scenarioCanvasStepBadge(draft.steps, step);
     const position = step.actionPosition;
     const siblings = position === "main" ? mainSteps : draft.steps.filter((item) => item.nodeId === step.nodeId && item.actionPosition === position);
     const siblingIndex = siblings.findIndex((item) => item.id === step.id);
@@ -1866,8 +1914,8 @@ function DesignTab({ debuggingStepId, draft, latestRun, liveProgress, moveStep, 
               ? " flow-skipped"
               : " flow-pending";
     return <div className={`scenario-step-wrap${runState}`} key={step.id}>
-    <article className={`${selectedStepId === step.id ? "scenario-step-card active" : "scenario-step-card"}${runState}${debugState}`} onClick={() => onSelect(step.id)}>
-      <b className="scenario-step-index">{index + 1}</b><span className={`scenario-method ${step.kind}`}>{step.method}</span>
+    <article className={`${selectedStepId === step.id ? "scenario-step-card active" : "scenario-step-card"}${position === "main" ? "" : " attached-action"}${runState}${debugState}`} onClick={() => onSelect(step.id)}>
+      <b className="scenario-step-index">{badge}</b><span className={`scenario-method ${step.kind}`}>{step.method}</span>
       <div className="scenario-step-main"><strong>{step.name}</strong><small>{step.path || "无附加说明"}</small></div>
       {!liveProgress && debugResult
         ? <span className={`scenario-step-run-status debug ${debugFailed ? "failed" : debugResult.status.toLowerCase()}`}>单步{debugFailed ? "失败" : debugResult.status.toLowerCase() === "passed" ? "通过" : debugResult.status} · {debugResult.durationMs}ms</span>
@@ -1875,6 +1923,7 @@ function DesignTab({ debuggingStepId, draft, latestRun, liveProgress, moveStep, 
       <span className={`scenario-step-policy ${position}`}>{scenarioPositionLabels[position]} · {position === "after" ? "始终执行" : step.continueOnFailure ? "失败继续" : "失败停止"}</span>
       <div className="scenario-step-actions">{scenarioStepSupportsDebug(step) && <button className={debuggingStepId === step.id ? "run loading" : "run"} disabled={Boolean(debuggingStepId)} onClick={(event) => { event.stopPropagation(); onExecute(step); }} title="单独执行步骤" type="button"><Icon name={debuggingStepId === step.id ? "progress_activity" : "play_arrow"} /></button>}<button disabled={siblingIndex <= 0} onClick={(event) => { event.stopPropagation(); moveStep(index, -1); }} title="上移" type="button"><Icon name="arrow_upward" /></button><button disabled={siblingIndex < 0 || siblingIndex >= siblings.length - 1} onClick={(event) => { event.stopPropagation(); moveStep(index, 1); }} title="下移" type="button"><Icon name="arrow_downward" /></button><button className="danger" onClick={(event) => { event.stopPropagation(); onRemove(step.id); }} title="移除步骤" type="button"><Icon name="delete" /></button></div>
       {(incoming.length > 0 || outgoing.length > 0) && <div className="scenario-step-references"><IncomingReferences links={incoming} run={latestRun} /><OutgoingReferences links={outgoing} run={latestRun} stepDebugResults={stepDebugResults} /></div>}
+      {attachments && <div className="scenario-step-attachments" onClick={(event) => event.stopPropagation()}>{attachments}</div>}
     </article>
   </div>;
   };
@@ -1904,23 +1953,43 @@ function DesignTab({ debuggingStepId, draft, latestRun, liveProgress, moveStep, 
       {connectorLinks.length > 0 && <div className="scenario-connector-bindings"><Icon name="account_tree" /><span><b>{connectorLinks.length} 条跨节点引用</b><small>进入测试用例节点 {nodeIndex + 1}</small></span><span className="scenario-connector-sources">{[...new Set(connectorLinks.map((link) => link.sourceStepNumber))].map((stepNumber) => <i key={stepNumber}>步骤 {stepNumber}</i>)}</span></div>}
     </div>;
   };
+  const renderActionGroup = (nodeId: string | undefined, position: Extract<ScenarioActionPosition, "before" | "after">, actions: ScenarioStep[]) => {
+    if (actions.length === 0) return null;
+    const title = position === "before" ? "前置动作" : "后置动作";
+    const groupKey = `${nodeId || "node"}:${position}`;
+    const expanded = expandedActionGroups[groupKey] === true;
+    const visibleActions = expanded ? actions : [];
+    const toggleGroup = () => setExpandedActionGroups((current) => ({ ...current, [groupKey]: !expanded }));
+    return <section className={`scenario-action-group embedded ${position}${expanded ? " expanded" : " collapsed"}`} aria-label={`${title} ${actions.length} 条`}>
+      <header className="scenario-action-group-head">
+        <span className="scenario-action-group-icon"><Icon name={position === "before" ? "first_page" : "last_page"} /></span>
+        <div><strong>{title}</strong><small>{actions.length} 个动作 · {position === "after" ? "主用例后始终执行" : "主用例前按顺序执行"}</small></div>
+        <div className="scenario-action-state-summary">
+          {actionStateSummary(actions).map((item) => <span className={`scenario-action-state ${item.key}`} key={item.key}>{item.label} {item.count}</span>)}
+        </div>
+        <button aria-expanded={expanded} aria-label={`${expanded ? "收起" : "展开"}${title}`} className="scenario-action-group-toggle" onClick={toggleGroup} type="button"><span>{expanded ? "收起" : "展开"}</span><Icon name={expanded ? "expand_less" : "expand_more"} /></button>
+      </header>
+      {expanded && <div className="scenario-action-list">{visibleActions.map((step) => renderStep(step))}</div>}
+    </section>;
+  };
   return <div className="scenario-step-lane">
     {mainSteps.length === 0 && <button className="scenario-phase-empty" onClick={() => onAddAction(undefined, "main")} type="button"><Icon name="add_circle" /><span><strong>尚未添加主测试用例</strong><small>从项目测试用例中选择 API 或 WebSocket 用例</small></span></button>}
     {mainSteps.map((mainStep, nodeIndex) => {
       const beforeActions = draft.steps.filter((step) => step.nodeId === mainStep.nodeId && step.actionPosition === "before");
       const afterActions = draft.steps.filter((step) => step.nodeId === mainStep.nodeId && step.actionPosition === "after");
+      const embeddedActions = (beforeActions.length > 0 || afterActions.length > 0)
+        ? <div className="scenario-embedded-actions">{renderActionGroup(mainStep.nodeId, "before", beforeActions)}{renderActionGroup(mainStep.nodeId, "after", afterActions)}</div>
+        : undefined;
       return <Fragment key={mainStep.nodeId}>
       {renderNodeConnector(mainStep, nodeIndex)}
       <section className="scenario-case-node">
         <header className="scenario-case-node-head"><span>测试用例节点 {nodeIndex + 1}</span><strong>{mainStep.name}</strong></header>
-        {beforeActions.length > 0 && <div className="scenario-node-actions before">{beforeActions.map((step) => renderStep(step))}</div>}
-        {renderStep(mainStep)}
+        {renderStep(mainStep, embeddedActions)}
         <div className="scenario-node-action-bar">
           <button onClick={() => onAddAction(mainStep.nodeId, "before")} type="button"><Icon name="add" />添加前置动作</button>
           <span>动作仅绑定当前测试用例</span>
           <button onClick={() => onAddAction(mainStep.nodeId, "after")} type="button"><Icon name="add" />添加后置动作</button>
         </div>
-        {afterActions.length > 0 && <div className="scenario-node-actions after">{afterActions.map((step) => renderStep(step))}</div>}
       </section>
       </Fragment>;
     })}
@@ -2190,6 +2259,30 @@ function scriptOutputNames(config: Record<string, unknown>) {
 
 function scenarioVariableRuntimeValue(name: string, previousSteps: ScenarioStep[], latestRun?: ScenarioRun, stepDebugResults?: Record<string, ScenarioStepDebugResult>) {
   for (const sourceStep of previousSteps) {
+    const sourceConfig = parseStepConfig(sourceStep.configText);
+    const runValue = latestRun?.stepResults
+      .find((result) => result.stepId === sourceStep.id)
+      ?.extractedVariables
+      .find((variable) => variable.name === name);
+    if (runValue && !runValue.error && !runValue.masked) return runValue.value;
+
+    if (sourceConfig.output === name) {
+      if (sourceStep.kind === "fixed_value" && "value" in sourceConfig && sourceConfig.value !== "") return sourceConfig.value;
+      const debugResult = stepDebugResults?.[sourceStep.id];
+      if (debugResult) {
+        const debugValue = extractScenarioDebugValue(debugResult, name);
+        if (debugValue.found) return debugValue.value;
+      }
+    }
+
+    if (Array.isArray(sourceConfig.outputs) && sourceConfig.outputs.map(String).includes(name)) {
+      const debugResult = stepDebugResults?.[sourceStep.id];
+      if (debugResult) {
+        const debugValue = extractScenarioDebugValue(debugResult, name);
+        if (debugValue.found) return debugValue.value;
+      }
+    }
+
     const sourceContext = readScenarioContext(sourceStep.configText);
     const matchingExtraction = sourceContext.extractions.find((extraction) => extraction.name === name);
     if (matchingExtraction) {
@@ -2198,14 +2291,23 @@ function scenarioVariableRuntimeValue(name: string, previousSteps: ScenarioStep[
         const debugValue = extractScenarioDebugValue(debugResult, matchingExtraction.path, matchingExtraction.messageIndex);
         if (debugValue.found) return debugValue.value;
       }
-      const runValue = latestRun?.stepResults
-        .find((result) => result.stepId === sourceStep.id)
-        ?.extractedVariables
-        .find((variable) => variable.name === name);
-      if (runValue && !runValue.error && !runValue.masked) return runValue.value;
     }
   }
   return undefined;
+}
+
+function resolveScenarioTemplateText(text: string, previousSteps: ScenarioStep[], latestRun?: ScenarioRun, stepDebugResults?: Record<string, ScenarioStepDebugResult>) {
+  const missing = new Set<string>();
+  const resolved = text.replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_match, rawName: string) => {
+    const name = rawName.trim();
+    const value = scenarioVariableRuntimeValue(name, previousSteps, latestRun, stepDebugResults);
+    if (value === undefined) {
+      missing.add(name);
+      return `{{${name}}}`;
+    }
+    return String(value);
+  });
+  return { resolved, missing: [...missing] };
 }
 
 function scriptDebugInputTemplate(config: Record<string, unknown>, previousSteps: ScenarioStep[], latestRun?: ScenarioRun, stepDebugResults?: Record<string, ScenarioStepDebugResult>) {
@@ -2304,8 +2406,8 @@ function StepInspector({
   const generatedScriptDebugInputText = step.kind === "script"
     ? JSON.stringify(scriptDebugInputTemplate(requestConfig, previousSteps, latestRun, stepDebugResults), null, 2)
     : "";
-  const upstreamVariables = allSteps.slice(0, stepIndex).flatMap((sourceStep, index) =>
-    readScenarioContext(sourceStep.configText).extractions.map((extraction) => ({ sourceStep, stepNumber: index + 1, extraction })));
+  const upstreamVariables = allSteps.slice(0, stepIndex).flatMap((sourceStep) =>
+    readScenarioContext(sourceStep.configText).extractions.map((extraction) => ({ sourceStep, stepNumber: scenarioStepNodeNumber(allSteps, sourceStep), extraction })));
   const availableScriptInputs = availableScriptInputsAt(allSteps, stepIndex);
   useEffect(() => {
     setResponseExpanded(false);
@@ -2401,8 +2503,13 @@ function StepInspector({
     {canPromoteResponseFields && <section className="scenario-context-section"><header><div><strong>响应取值</strong><small>给响应 JSON 路径命名，供后续步骤直接引用</small></div><button onClick={() => updateContext({ ...context, extractions: [...context.extractions, { id: scenarioUniqueId("VAR"), name: "", path: "" }] })} type="button"><Icon name="add" />新增</button></header>
       {context.extractions.length === 0 && <p>暂未定义响应取值，例如变量名 companyId、路径 data.id。</p>}
       {context.extractions.map((extraction) => {
+        const resolvedPath = debugResult
+          ? resolveScenarioTemplateText(extraction.path, previousSteps, latestRun, stepDebugResults)
+          : undefined;
         const debugExtraction = debugResult
-          ? extractScenarioDebugValue(debugResult, extraction.path, extraction.messageIndex)
+          ? resolvedPath?.missing.length
+            ? { found: false, value: undefined, error: `路径变量未解析：${resolvedPath.missing.join("、")}` }
+            : extractScenarioDebugValue(debugResult, resolvedPath?.resolved ?? extraction.path, extraction.messageIndex)
           : undefined;
         const runtime = debugExtraction
           ? {
@@ -2688,10 +2795,11 @@ function appendRequestFields(
 }
 
 function collectScenarioRequestFields(steps: ScenarioStep[]) {
-  return steps.flatMap((step, stepIndex) => {
+  return steps.flatMap((step) => {
     if (step.kind !== "api_case" && step.kind !== "websocket_case") return [];
     const config = parseStepRequestConfig(step);
     const fields: ScenarioRequestField[] = [];
+    const stepIndex = scenarioStepNodeNumber(steps, step) - 1;
     appendRequestFields(fields, step, stepIndex, "path", config.path ?? step.path);
     appendRequestFields(fields, step, stepIndex, "headers", config.headers ?? {});
     if (step.kind === "api_case") {

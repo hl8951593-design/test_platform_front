@@ -1,4 +1,4 @@
-import { type MouseEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type MouseEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   createTestCase,
   createWebSocketTestCase,
@@ -35,6 +35,13 @@ import {
   type BackendEnvironmentVariable,
   upsertEnvironmentVariable,
 } from "../api/environmentConfigs";
+import {
+  createAiSkillRun,
+  getAiSkillRun,
+  subscribeAiSkillRunEvents,
+  type AiSkillRunEvent,
+  type AiSkillRunStatus,
+} from "../api/aiSkillRuns";
 import { Icon } from "../components/Icon";
 import { Pagination, usePagination } from "../components/Pagination";
 import type { EnvironmentOption } from "../api/projects";
@@ -77,6 +84,7 @@ type CaseProtocol = "http" | "websocket";
 type EditorTab = "params" | "headers" | "body" | "message" | "assertions" | "response";
 type EditorMode = "create" | "edit";
 type BodyType = "JSON" | "Form Data" | "x-www-form-urlencoded" | "Raw Text";
+type AiDraftTab = "params" | "headers" | "body" | "assertions";
 type CaseStatusFilter = "all" | ApiCase["status"];
 type ListResponse = ApiResult<BackendTestCase[]>;
 type VariableFormState = { name: string; value: string; isSecret: boolean };
@@ -99,6 +107,24 @@ type DebugExecutionView = {
   responseHeaders: string;
   status?: string;
   statusCode?: string | number;
+};
+type AiRunViewState = {
+  errorMessage?: string;
+  runId?: string;
+  status: AiSkillRunStatus;
+  timeline: AiSkillRunEvent[];
+};
+type AiEditableHttpCase = {
+  payload: TestCaseSavePayload;
+  activeTab: AiDraftTab;
+  params: KeyValueRow[];
+  headers: KeyValueRow[];
+  bodyType: BodyType;
+  jsonBody: string;
+  formBody: KeyValueRow[];
+  urlEncodedBody: KeyValueRow[];
+  rawBody: string;
+  assertions: string[];
 };
 type LiveWebSocketStatus = "disconnected" | "connecting" | "connected" | "error";
 type LiveWebSocketLog = {
@@ -1463,6 +1489,216 @@ function normalizeGeneratedCase(
   };
 }
 
+function normalizeGeneratedHttpMethod(method: unknown) {
+  const value = normalizeMethod(String(method || "GET").toUpperCase());
+  return httpMethods.includes(value as (typeof httpMethods)[number]) ? value : "GET";
+}
+
+function aiEditableCaseFromPayload(
+  item: AnyTestCaseSavePayload,
+  environmentId: number,
+  sourceCase: ApiCase,
+): AiEditableHttpCase {
+  const httpItem = item as Partial<TestCaseSavePayload>;
+  const bodyType = bodyTypeFromBackend(httpItem.body_type);
+  const body = httpItem.body;
+  const method = normalizeGeneratedHttpMethod(httpItem.method || sourceCase.method);
+  const environmentIds = httpItem.environment_ids?.length
+    ? httpItem.environment_ids
+    : environmentId
+      ? [environmentId]
+      : sourceCase.environmentIds;
+  const payload: TestCaseSavePayload = {
+    name: httpItem.name?.trim() || `${sourceCase.name} - AI扩展`,
+    description: httpItem.description ?? "",
+    environment_id: httpItem.environment_id || environmentId || sourceCase.environmentId || environmentIds[0] || 0,
+    environment_ids: environmentIds,
+    method,
+    path: httpItem.path || sourceCase.path || "/",
+    headers: toStringRecord(httpItem.headers),
+    query_params: toStringRecord(httpItem.query_params),
+    body_type: httpItem.body_type ?? "none",
+    body: body ?? null,
+    assertions: Array.isArray(httpItem.assertions) ? httpItem.assertions : [],
+    extractors: Array.isArray(httpItem.extractors) ? httpItem.extractors : [],
+  };
+
+  return {
+    payload,
+    activeTab: "params",
+    params: objectToRows(payload.query_params),
+    headers: objectToRows(payload.headers),
+    bodyType,
+    jsonBody: bodyType === "JSON" ? stringifyBody(body) : "",
+    formBody: bodyType === "Form Data" ? objectToRows(body) : [],
+    urlEncodedBody: bodyType === "x-www-form-urlencoded" ? objectToRows(body) : [],
+    rawBody: bodyType === "Raw Text" && typeof body === "string" ? body : "",
+    assertions: payload.assertions.map(formatAssertionLine),
+  };
+}
+
+function aiEditableCaseToPayload(draft: AiEditableHttpCase): TestCaseSavePayload {
+  let body: unknown = null;
+  let backendBodyType: TestCaseRequestPayload["body_type"] = "none";
+
+  if (draft.bodyType === "JSON") {
+    backendBodyType = "json";
+    body = draft.jsonBody.trim() ? JSON.parse(draft.jsonBody) : null;
+  } else if (draft.bodyType === "Form Data") {
+    backendBodyType = "multipart";
+    body = rowsToObject(draft.formBody);
+  } else if (draft.bodyType === "x-www-form-urlencoded") {
+    backendBodyType = "form_urlencoded";
+    body = rowsToObject(draft.urlEncodedBody);
+  } else if (draft.rawBody.trim()) {
+    backendBodyType = "raw_text";
+    body = draft.rawBody;
+  }
+
+  return {
+    ...draft.payload,
+    method: normalizeGeneratedHttpMethod(draft.payload.method),
+    path: draft.payload.path.trim() || "/",
+    headers: rowsToObject(draft.headers),
+    query_params: rowsToObject(draft.params),
+    body_type: body === null ? "none" : backendBodyType,
+    body,
+    assertions: parseAssertions(draft.assertions),
+  };
+}
+
+function getAiDraftJsonError(draft: AiEditableHttpCase) {
+  if (draft.bodyType !== "JSON" || !draft.jsonBody.trim()) return "";
+  try {
+    JSON.parse(draft.jsonBody);
+    return "";
+  } catch (error) {
+    return error instanceof Error ? `JSON 格式错误：${error.message}` : "JSON 格式错误";
+  }
+}
+
+const aiRunEventLabels: Record<string, string> = {
+  "run.queued": "已排队",
+  "run.started": "开始运行",
+  "run.completed": "运行完成",
+  "run.failed": "运行失败",
+  "step.started": "步骤开始",
+  "step.completed": "步骤完成",
+  "tool.started": "工具开始",
+  "tool.completed": "工具完成",
+  "tool.failed": "工具失败",
+  "model.started": "模型开始",
+  "model.completed": "模型完成",
+};
+
+function aiRunEventTitle(event: AiSkillRunEvent) {
+  const title = event.payload.title ?? event.payload.name ?? event.payload.operation ?? event.payload.skill_id;
+  return title === undefined ? aiRunEventLabels[event.event] ?? event.event : String(title);
+}
+
+function aiRunEventMeta(event: AiSkillRunEvent) {
+  const details = [
+    event.payload.status,
+    event.payload.duration_ms === undefined ? undefined : `${event.payload.duration_ms} ms`,
+    event.payload.summary,
+  ].filter((item) => item !== undefined && item !== "");
+  return details.length ? details.map(String).join(" · ") : aiRunEventLabels[event.event] ?? event.event;
+}
+
+function aiRunEventIcon(event: AiSkillRunEvent) {
+  if (event.event.includes("failed")) return "error";
+  if (event.event.includes("completed")) return "check_circle";
+  if (event.event.startsWith("tool.")) return "construction";
+  if (event.event.startsWith("step.")) return "account_tree";
+  return "radio_button_checked";
+}
+
+function aiRunEventClass(event: AiSkillRunEvent, suffix = "") {
+  return `${event.event.replace(".", "-")}${suffix}`.trim();
+}
+
+type AiRunStreamEntry = {
+  body: string;
+  event: AiSkillRunEvent;
+  meta: string;
+  title: string;
+};
+
+function aiRunPayloadText(payload: Record<string, unknown>, keys: string[]) {
+  for (const key of keys) {
+    const value = payload[key];
+    if (value !== undefined && value !== null && value !== "") return typeof value === "string" ? value : JSON.stringify(value, null, 2);
+  }
+  return "";
+}
+
+function aiRunModelDelta(event: AiSkillRunEvent) {
+  return aiRunPayloadText(event.payload, ["content", "text", "delta", "message", "output"]);
+}
+
+function aiRunEventBody(event: AiSkillRunEvent, completedText: string, failedText: string) {
+  if (event.event === "run.completed") return completedText;
+  if (event.event === "run.failed") return aiRunPayloadText(event.payload, ["error_message", "error", "message"]) || failedText;
+  return aiRunPayloadText(event.payload, ["content", "text", "message", "summary", "input", "arguments", "args", "result", "output", "error_message", "error"]);
+}
+
+function aiRunStreamEntries(events: AiSkillRunEvent[], completedText: string, failedText: string) {
+  const entries: AiRunStreamEntry[] = [];
+  let modelText = "";
+  let modelEvent: AiSkillRunEvent | undefined;
+  const flushModelText = () => {
+    if (!modelText || !modelEvent) return;
+    entries.push({
+      body: modelText,
+      event: modelEvent,
+      meta: "模型输出",
+      title: "AI 输出",
+    });
+    modelText = "";
+    modelEvent = undefined;
+  };
+
+  events.forEach((event) => {
+    if (event.event === "heartbeat") return;
+    if (event.event === "model.delta") {
+      modelText += aiRunModelDelta(event);
+      modelEvent = event;
+      return;
+    }
+    flushModelText();
+    entries.push({
+      body: aiRunEventBody(event, completedText, failedText),
+      event,
+      meta: aiRunEventMeta(event),
+      title: aiRunEventTitle(event),
+    });
+  });
+  flushModelText();
+  return entries;
+}
+
+function normalizeAiTestCaseGenerateResult(value: unknown, projectId: number, environmentId: number): AiTestCaseGenerateResult {
+  const source = readObject(value);
+  const data = readObject(source.data);
+  const result = Array.isArray(source.cases) ? source : data;
+  return {
+    project_id: Number(result.project_id ?? result.projectId ?? projectId),
+    environment_id: Number(result.environment_id ?? result.environmentId ?? environmentId),
+    environment_ids: Array.isArray(result.environment_ids)
+      ? result.environment_ids.map(Number).filter((item) => Number.isFinite(item))
+      : Array.isArray(result.environmentIds)
+        ? result.environmentIds.map(Number).filter((item) => Number.isFinite(item))
+        : [environmentId],
+    source_summary: typeof result.source_summary === "string"
+      ? result.source_summary
+      : typeof result.sourceSummary === "string"
+        ? result.sourceSummary
+        : undefined,
+    cases: Array.isArray(result.cases) ? result.cases as AnyTestCaseSavePayload[] : [],
+    warnings: Array.isArray(result.warnings) ? result.warnings.map(String) : undefined,
+  };
+}
+
 function formatGeneratedPreview(value: unknown) {
   if (value === null || value === undefined) return "-";
   if (typeof value === "string") return value.trim() || "-";
@@ -1768,13 +2004,19 @@ function AiExpandCaseModal({
     "length_overflow",
   ]);
   const [generateResult, setGenerateResult] = useState<AiTestCaseGenerateResult | null>(null);
+  const [editableCases, setEditableCases] = useState<AiEditableHttpCase[]>([]);
+  const [expansionRun, setExpansionRun] = useState<AiRunViewState | undefined>();
   const [selectedCaseIndexes, setSelectedCaseIndexes] = useState<number[]>([]);
   const [message, setMessage] = useState("");
   const [isGenerating, setIsGenerating] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const selectedCaseSet = useMemo(() => new Set(selectedCaseIndexes), [selectedCaseIndexes]);
-  const generatedCases = generateResult?.cases ?? [];
+  const generatedCases = editableCases;
   const normalizedCount = Math.min(10, Math.max(1, Number.isFinite(caseCount) ? caseCount : 5));
+  const expansionRunAbortRef = useRef<AbortController | undefined>(undefined);
+  const expansionResultRef = useRef<AiTestCaseGenerateResult | undefined>(undefined);
+
+  useEffect(() => () => expansionRunAbortRef.current?.abort(), []);
 
   const toggleExpansionType = (type: string) => {
     setExpansionTypes((current) =>
@@ -1786,6 +2028,97 @@ function AiExpandCaseModal({
     setSelectedCaseIndexes((current) =>
       current.includes(index) ? current.filter((item) => item !== index) : [...current, index],
     );
+  };
+
+  const patchEditableCase = (index: number, patch: Partial<AiEditableHttpCase>) => {
+    setEditableCases((current) => current.map((item, itemIndex) => (itemIndex === index ? { ...item, ...patch } : item)));
+  };
+
+  const patchEditablePayload = (index: number, patch: Partial<TestCaseSavePayload>) => {
+    setEditableCases((current) =>
+      current.map((item, itemIndex) =>
+        itemIndex === index ? { ...item, payload: { ...item.payload, ...patch } } : item,
+      ),
+    );
+  };
+
+  const updateEditableRows = (
+    index: number,
+    key: "params" | "headers" | "formBody" | "urlEncodedBody",
+    rowIndex: number,
+    field: keyof KeyValueRow,
+    value: string | boolean,
+  ) => {
+    setEditableCases((current) =>
+      current.map((item, itemIndex) =>
+        itemIndex === index
+          ? {
+              ...item,
+              [key]: item[key].map((row, currentRowIndex) =>
+                currentRowIndex === rowIndex ? { ...row, [field]: value } : row,
+              ),
+            }
+          : item,
+      ),
+    );
+  };
+
+  const addEditableRow = (index: number, key: "params" | "headers" | "formBody" | "urlEncodedBody") => {
+    setEditableCases((current) =>
+      current.map((item, itemIndex) =>
+        itemIndex === index ? { ...item, [key]: [...item[key], { key: "", value: "", enabled: true }] } : item,
+      ),
+    );
+  };
+
+  const deleteEditableRow = (index: number, key: "params" | "headers" | "formBody" | "urlEncodedBody", rowIndex: number) => {
+    setEditableCases((current) =>
+      current.map((item, itemIndex) =>
+        itemIndex === index ? { ...item, [key]: item[key].filter((_, currentRowIndex) => currentRowIndex !== rowIndex) } : item,
+      ),
+    );
+  };
+
+  const applyExpansionResult = (result: AiTestCaseGenerateResult, targetEnvironmentId: number) => {
+    expansionResultRef.current = result;
+    setGenerateResult(result);
+    setEditableCases(result.cases.map((item) => aiEditableCaseFromPayload(item, targetEnvironmentId, apiCase)));
+    setSelectedCaseIndexes(result.cases.map((_, index) => index));
+    setMessage(result.cases.length > 0 ? `已扩展 ${result.cases.length} 条测试用例草稿` : "AI 未返回可用扩展用例");
+  };
+
+  const handleExpansionRunEvent = (event: AiSkillRunEvent, selectedEnvironmentId: number) => {
+    if (event.event === "heartbeat") return;
+    if (event.event === "run.queued" || event.event === "run.started") {
+      setExpansionRun((current) => current ? {
+        ...current,
+        status: event.event === "run.queued" ? "queued" : "running",
+        timeline: [...current.timeline, event],
+      } : current);
+      return;
+    }
+    if (event.event === "run.completed") {
+      const result = normalizeAiTestCaseGenerateResult(event.payload.result ?? event.payload, projectId ?? 0, selectedEnvironmentId);
+      applyExpansionResult(result, selectedEnvironmentId);
+      setExpansionRun((current) => current ? {
+        ...current,
+        status: "completed",
+        timeline: [...current.timeline, event],
+      } : current);
+      return;
+    }
+    if (event.event === "run.failed") {
+      const errorMessage = String(event.payload.error_message ?? event.payload.error ?? "AI扩展测试用例失败");
+      setExpansionRun((current) => current ? {
+        ...current,
+        status: "failed",
+        errorMessage,
+        timeline: [...current.timeline, event],
+      } : current);
+      setMessage(errorMessage);
+      return;
+    }
+    setExpansionRun((current) => current ? { ...current, timeline: [...current.timeline, event] } : current);
   };
 
   const expandCases = async () => {
@@ -1805,21 +2138,65 @@ function AiExpandCaseModal({
     setIsGenerating(true);
     setMessage("");
     setGenerateResult(null);
+    setEditableCases([]);
+    setSelectedCaseIndexes([]);
+    setExpansionRun(undefined);
+    expansionResultRef.current = undefined;
+    expansionRunAbortRef.current?.abort();
+    const controller = new AbortController();
+    expansionRunAbortRef.current = controller;
+    const targetEnvironmentId = environmentId ?? apiCase.environmentId ?? apiCase.environmentIds[0] ?? 0;
+    const payload: AiTestCaseExpandPayload = {
+      requirement: requirement.trim(),
+      generate_count: normalizedCount,
+      expansion_types: expansionTypes,
+      include_assertions: includeAssertions,
+    };
+    let runCreated = false;
     try {
-      const payload: AiTestCaseExpandPayload = {
-        requirement: requirement.trim(),
-        generate_count: normalizedCount,
-        expansion_types: expansionTypes,
-        include_assertions: includeAssertions,
-      };
-      const result = await expandAiTestCase(projectId, apiCase.backendId, payload, environmentId);
-      setGenerateResult(result);
-      setSelectedCaseIndexes(result.cases.map((_, index) => index));
-      setMessage(result.cases.length > 0 ? `已扩展 ${result.cases.length} 条测试用例草稿` : "AI 未返回可用扩展用例");
+      const run = await createAiSkillRun("http-test-case", {
+        operation: "expand",
+        project_id: projectId,
+        environment_id: targetEnvironmentId || undefined,
+        source_id: apiCase.backendId,
+        input: payload,
+      });
+      runCreated = true;
+      setExpansionRun({ runId: run.runId, status: run.status, timeline: [] });
+      setMessage(`已创建 AI Skill Run ${run.runId}`);
+      await subscribeAiSkillRunEvents(run.runId, (event) => handleExpansionRunEvent(event, targetEnvironmentId), {
+        signal: controller.signal,
+      });
+      if (!controller.signal.aborted && !expansionResultRef.current) {
+        const snapshot = await getAiSkillRun(run.runId);
+        snapshot.events.forEach((event) => handleExpansionRunEvent(event, targetEnvironmentId));
+        if (snapshot.status === "completed" && snapshot.result !== undefined) {
+          applyExpansionResult(normalizeAiTestCaseGenerateResult(snapshot.result, projectId, targetEnvironmentId), targetEnvironmentId);
+        }
+        if (snapshot.status === "failed") {
+          const errorMessage = snapshot.errorMessage ?? "AI扩展测试用例失败";
+          setExpansionRun((current) => current ? { ...current, status: "failed", errorMessage } : current);
+          setMessage(errorMessage);
+        }
+      }
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "AI扩展测试用例失败，请稍后重试");
+      if (controller.signal.aborted) return;
+      if (!runCreated) {
+        try {
+          const result = await expandAiTestCase(projectId, apiCase.backendId, payload, environmentId);
+          setExpansionRun(undefined);
+          applyExpansionResult(result, targetEnvironmentId);
+          return;
+        } catch (legacyError) {
+          setMessage(legacyError instanceof Error ? legacyError.message : "AI扩展测试用例失败，请稍后重试");
+          return;
+        }
+      }
+      const errorMessage = error instanceof Error ? error.message : "AI扩展测试用例失败，请稍后重试";
+      setExpansionRun((current) => current ? { ...current, status: "failed", errorMessage } : current);
+      setMessage(errorMessage);
     } finally {
-      setIsGenerating(false);
+      if (!controller.signal.aborted) setIsGenerating(false);
     }
   };
 
@@ -1835,11 +2212,17 @@ function AiExpandCaseModal({
       return;
     }
 
+    const invalidJsonCase = selectedCases.find((item) => getAiDraftJsonError(item));
+    if (invalidJsonCase) {
+      setMessage(`${invalidJsonCase.payload.name || "扩展用例"} 的 JSON Body 格式错误，请修正后再保存`);
+      return;
+    }
+
     setIsSaving(true);
     setMessage("");
     try {
       await onSaveGenerated(
-        selectedCases.map((item) => normalizeGeneratedCase(item, targetEnvironmentId, apiCase.protocol)),
+        selectedCases.map((item) => normalizeGeneratedCase(aiEditableCaseToPayload(item), targetEnvironmentId, "http")),
         apiCase.protocol,
       );
     } catch (error) {
@@ -1851,7 +2234,7 @@ function AiExpandCaseModal({
 
   return (
     <div className="modal-backdrop" role="presentation">
-      <div aria-modal="true" className="ai-generate-modal" role="dialog">
+      <div aria-modal="true" className="ai-generate-modal ai-expand-modal" role="dialog">
         <div className="modal-head">
           <div>
             <span className="eyebrow">AI扩展测试用例</span>
@@ -1913,7 +2296,14 @@ function AiExpandCaseModal({
 
         {message && <p className="form-message">{message}</p>}
 
-        {isGenerating && (
+        {expansionRun ? (
+          <AiSkillRunPanel
+            completedText="已生成扩展用例草稿，正在整理可编辑结果。"
+            failedText="AI扩展测试用例失败。"
+            label="AI Skill Run"
+            run={expansionRun}
+          />
+        ) : isGenerating && (
           <div className="ai-generate-waiting">
             <span className="ai-spinner" aria-hidden="true">
               <Icon name="auto_awesome" />
@@ -1951,32 +2341,18 @@ function AiExpandCaseModal({
             )}
             <div className="ai-generated-case-list">
               {generatedCases.map((item, index) => (
-                <button
-                  className={selectedCaseSet.has(index) ? "ai-generated-case selected" : "ai-generated-case"}
-                  key={`${item.name}-${index}`}
-                  onClick={() => toggleGeneratedCase(index)}
-                  type="button"
-                >
-                  <span className={selectedCaseSet.has(index) ? "option-check active" : "option-check"}>
-                    <Icon name="check" />
-                  </span>
-                  <div>
-                    <strong>{item.name || `AI扩展用例 ${index + 1}`}</strong>
-                    <small>{item.description || "暂无描述"}</small>
-                  </div>
-                  <span className={`method method-${getGeneratedCaseMethod(item, apiCase.protocol)}`}>
-                    {getGeneratedCaseMethod(item, apiCase.protocol)}
-                  </span>
-                  <code>{getGeneratedCasePath(item, apiCase.protocol) || apiCase.path}</code>
-                  <div className="ai-generated-case-details">
-                    {getGeneratedCaseDetail(item, apiCase.protocol).map((detail) => (
-                      <div className="ai-generated-case-detail" key={detail.label}>
-                        <span>{detail.label}</span>
-                        <pre>{detail.value}</pre>
-                      </div>
-                    ))}
-                  </div>
-                </button>
+                <AiEditableCaseDraftCard
+                  draft={item}
+                  index={index}
+                  isSelected={selectedCaseSet.has(index)}
+                  key={`${item.payload.name}-${index}`}
+                  onAddRow={addEditableRow}
+                  onDeleteRow={deleteEditableRow}
+                  onPatchDraft={patchEditableCase}
+                  onPatchPayload={patchEditablePayload}
+                  onToggleSelect={toggleGeneratedCase}
+                  onUpdateRow={updateEditableRows}
+                />
               ))}
             </div>
           </div>
@@ -1995,6 +2371,257 @@ function AiExpandCaseModal({
         </div>
       </div>
     </div>
+  );
+}
+
+function AiSkillRunPanel({
+  completedText,
+  failedText,
+  label,
+  run,
+}: {
+  completedText: string;
+  failedText: string;
+  label: string;
+  run: AiRunViewState;
+}) {
+  const streamRef = useRef<HTMLDivElement | null>(null);
+  const entries = aiRunStreamEntries(run.timeline, completedText, failedText);
+  const latestEntry = entries[entries.length - 1];
+  useLayoutEffect(() => {
+    const element = streamRef.current;
+    if (!element) return;
+    element.scrollTop = element.scrollHeight;
+    const latestBody = element.querySelector<HTMLElement>("article.is-current pre");
+    if (latestBody) latestBody.scrollTop = latestBody.scrollHeight;
+  }, [entries.length, latestEntry?.body]);
+
+  return (
+    <section className={`scenario-ai-run-panel api-ai-run-panel ${run.status}`} aria-label={label}>
+      <header>
+        <div><strong>{label}</strong><small>{run.runId ?? "正在创建"} · {run.status}</small></div>
+        {run.status === "queued" || run.status === "running" ? <Icon name="progress_activity" /> : <Icon name={run.status === "completed" ? "check_circle" : "error"} />}
+      </header>
+      <div className="scenario-ai-run-content merged">
+        <section className="scenario-ai-stream-output">
+          <div className="scenario-ai-stream-head"><strong>AI 流式输出</strong>{latestEntry && <small>最新：{latestEntry.title}</small>}</div>
+          {entries.length === 0 ? <p>等待后端返回...</p> : <div className="scenario-ai-stream" ref={streamRef}>{entries.map((entry, index) => {
+            const isLatest = index === entries.length - 1;
+            return <article className={aiRunEventClass(entry.event, isLatest ? " is-current" : "")} key={`stream-${entry.event.id ?? entry.event.sequence ?? index}-${entry.event.event}-${index}`}>
+              <Icon name={aiRunEventIcon(entry.event)} />
+              <span><b>{entry.title}</b><small>{entry.meta}</small>{entry.body && <pre>{entry.body}</pre>}</span>
+            </article>;
+          })}</div>}
+        </section>
+      </div>
+      {run.errorMessage && <p className="scenario-inline-error">{run.errorMessage}</p>}
+    </section>
+  );
+}
+
+function AiEditableCaseDraftCard({
+  draft,
+  index,
+  isSelected,
+  onAddRow,
+  onDeleteRow,
+  onPatchDraft,
+  onPatchPayload,
+  onToggleSelect,
+  onUpdateRow,
+}: {
+  draft: AiEditableHttpCase;
+  index: number;
+  isSelected: boolean;
+  onAddRow: (index: number, key: "params" | "headers" | "formBody" | "urlEncodedBody") => void;
+  onDeleteRow: (index: number, key: "params" | "headers" | "formBody" | "urlEncodedBody", rowIndex: number) => void;
+  onPatchDraft: (index: number, patch: Partial<AiEditableHttpCase>) => void;
+  onPatchPayload: (index: number, patch: Partial<TestCaseSavePayload>) => void;
+  onToggleSelect: (index: number) => void;
+  onUpdateRow: (
+    index: number,
+    key: "params" | "headers" | "formBody" | "urlEncodedBody",
+    rowIndex: number,
+    field: keyof KeyValueRow,
+    value: string | boolean,
+  ) => void;
+}) {
+  const jsonError = getAiDraftJsonError(draft);
+  const variableOptions: string[] = [];
+  const noop = () => undefined;
+
+  const formatDraftJson = () => {
+    if (!draft.jsonBody.trim()) return;
+    try {
+      onPatchDraft(index, { jsonBody: JSON.stringify(JSON.parse(draft.jsonBody), null, 2) });
+    } catch {
+      // Inline validation shows the parse error; keep the user's text unchanged.
+    }
+  };
+
+  return (
+    <article className={isSelected ? "ai-generated-case-editor selected" : "ai-generated-case-editor"}>
+      <div className="ai-generated-editor-head">
+        <button
+          aria-label={isSelected ? `取消选择扩展用例 ${index + 1}` : `选择扩展用例 ${index + 1}`}
+          className={isSelected ? "ai-generated-select selected" : "ai-generated-select"}
+          onClick={() => onToggleSelect(index)}
+          type="button"
+        >
+          <span className={isSelected ? "option-check active" : "option-check"}>
+            <Icon name="check" />
+          </span>
+        </button>
+        <label className="ai-generated-title-field">
+          <span>用例名称</span>
+          <input
+            aria-label={`扩展用例 ${index + 1} 名称`}
+            onChange={(event) => onPatchPayload(index, { name: event.target.value })}
+            value={draft.payload.name}
+          />
+        </label>
+        <label className="ai-generated-title-field ai-generated-description-field">
+          <span>说明</span>
+          <input
+            aria-label={`扩展用例 ${index + 1} 说明`}
+            onChange={(event) => onPatchPayload(index, { description: event.target.value })}
+            placeholder="补充这个扩展用例覆盖的异常、边界或业务场景"
+            value={draft.payload.description}
+          />
+        </label>
+      </div>
+
+      <div className="ai-generated-request-line">
+        <select
+          className={`method-select method-select-${draft.payload.method}`}
+          onChange={(event) => onPatchPayload(index, { method: event.target.value })}
+          value={draft.payload.method}
+        >
+          {httpMethods.map((item) => (
+            <option key={item} value={item}>{item}</option>
+          ))}
+        </select>
+        <input
+          aria-label={`扩展用例 ${index + 1} 请求路径`}
+          onChange={(event) => onPatchPayload(index, { path: event.target.value })}
+          placeholder="/api/v1/example"
+          value={draft.payload.path}
+        />
+      </div>
+
+      <div className="ai-generated-editor-tabs">
+        <button className={draft.activeTab === "params" ? "active" : ""} onClick={() => onPatchDraft(index, { activeTab: "params" })} type="button">Params</button>
+        <button className={draft.activeTab === "headers" ? "active" : ""} onClick={() => onPatchDraft(index, { activeTab: "headers" })} type="button">Headers</button>
+        <button className={draft.activeTab === "body" ? "active" : ""} onClick={() => onPatchDraft(index, { activeTab: "body" })} type="button">Body</button>
+        <button className={draft.activeTab === "assertions" ? "active" : ""} onClick={() => onPatchDraft(index, { activeTab: "assertions" })} type="button">断言</button>
+      </div>
+
+      <div className="ai-generated-editor-panel">
+        {draft.activeTab === "params" && (
+          <KeyValueEditor
+            environmentVariableOptions={variableOptions}
+            onLoadVariableOptions={noop}
+            onAdd={() => onAddRow(index, "params")}
+            onChange={(rowIndex, field, value) => onUpdateRow(index, "params", rowIndex, field, value)}
+            onDelete={(rowIndex) => onDeleteRow(index, "params", rowIndex)}
+            rows={draft.params}
+            title="请求参数"
+          />
+        )}
+        {draft.activeTab === "headers" && (
+          <HeaderEditor
+            environmentVariableOptions={variableOptions}
+            onLoadVariableOptions={noop}
+            onAdd={() => onAddRow(index, "headers")}
+            onChange={(rowIndex, field, value) => onUpdateRow(index, "headers", rowIndex, field, value)}
+            onDelete={(rowIndex) => onDeleteRow(index, "headers", rowIndex)}
+            rows={draft.headers}
+          />
+        )}
+        {draft.activeTab === "body" && (
+          <div className="body-editor ai-generated-body-editor">
+            <div className="body-toolbar">
+              <label>
+                <span>Body 类型</span>
+                <select onChange={(event) => onPatchDraft(index, { bodyType: event.target.value as BodyType })} value={draft.bodyType}>
+                  <option>JSON</option>
+                  <option>Form Data</option>
+                  <option>x-www-form-urlencoded</option>
+                  <option>Raw Text</option>
+                </select>
+              </label>
+            </div>
+            {draft.bodyType === "JSON" && (
+              <div className="single-editor json-body-editor">
+                <div className="code-editor-toolbar">
+                  <div>
+                    <span>JSON 请求体</span>
+                    <small className={jsonError ? "json-invalid" : "json-valid"}>
+                      {jsonError ? "JSON 格式异常" : draft.jsonBody.trim() ? "JSON 格式正常" : "可留空，表示无请求体"}
+                    </small>
+                  </div>
+                  <button className="json-format-btn" disabled={!draft.jsonBody.trim()} onClick={formatDraftJson} type="button">
+                    <Icon name="data_object" />
+                    格式化 JSON
+                  </button>
+                </div>
+                <textarea
+                  className={jsonError ? "invalid-editor" : ""}
+                  onChange={(event) => onPatchDraft(index, { jsonBody: event.target.value })}
+                  placeholder="请输入 JSON 请求体；留空则按无请求体提交。"
+                  value={draft.jsonBody}
+                />
+                {jsonError && <p className="field-error">{jsonError}</p>}
+              </div>
+            )}
+            {draft.bodyType === "Form Data" && (
+              <BodyKeyValueEditor
+                environmentVariableOptions={variableOptions}
+                onLoadVariableOptions={noop}
+                onAdd={() => onAddRow(index, "formBody")}
+                onChange={(rowIndex, field, value) => onUpdateRow(index, "formBody", rowIndex, field, value)}
+                onDelete={(rowIndex) => onDeleteRow(index, "formBody", rowIndex)}
+                rows={draft.formBody}
+                title="Form Data"
+              />
+            )}
+            {draft.bodyType === "x-www-form-urlencoded" && (
+              <BodyKeyValueEditor
+                environmentVariableOptions={variableOptions}
+                onLoadVariableOptions={noop}
+                onAdd={() => onAddRow(index, "urlEncodedBody")}
+                onChange={(rowIndex, field, value) => onUpdateRow(index, "urlEncodedBody", rowIndex, field, value)}
+                onDelete={(rowIndex) => onDeleteRow(index, "urlEncodedBody", rowIndex)}
+                rows={draft.urlEncodedBody}
+                title="x-www-form-urlencoded"
+              />
+            )}
+            {draft.bodyType === "Raw Text" && (
+              <div className="single-editor">
+                <textarea
+                  onChange={(event) => onPatchDraft(index, { rawBody: event.target.value })}
+                  placeholder="请输入原始文本请求体"
+                  value={draft.rawBody}
+                />
+              </div>
+            )}
+          </div>
+        )}
+        {draft.activeTab === "assertions" && (
+          <div className="single-editor ai-generated-assertions-editor">
+            <label>
+              <span>断言规则</span>
+              <small>一行一条，例如 status == 400 或 body.code == 0。</small>
+              <textarea
+                onChange={(event) => onPatchDraft(index, { assertions: event.target.value.split("\n").filter(Boolean) })}
+                placeholder="例如：status == 400"
+                value={draft.assertions.join("\n")}
+              />
+            </label>
+          </div>
+        )}
+      </div>
+    </article>
   );
 }
 

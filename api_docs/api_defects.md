@@ -1,21 +1,48 @@
-# 缺陷跟踪接口
+# 缺陷跟踪接口文档
 
-状态：当前实现
-最后核验：2026-06-18
+本文档说明项目缺陷跟踪相关接口。接口基础路径为：
 
-缺陷模块用于按项目记录 Bug，并维护从创建到关闭或重新激活的生命周期。基础路径为 `/api/v1`。成功响应统一为 `{code, message, data}`。
+```text
+http://127.0.0.1:8000/api/v1
+```
 
-## 接口
+缺陷模块用于按项目记录 Bug，并维护从创建到关闭或重新激活的生命周期。成功响应统一为
+`{code, message, data}`。
 
-| 方法 | 路径 | 说明 |
-| --- | --- | --- |
-| GET/POST | `/defects?project_id={id}` | 查询或创建当前项目缺陷 |
-| GET/PUT/DELETE | `/defects/{defect_id}?project_id={id}` | 查询、更新或删除缺陷 |
-| PUT | `/defects/{defect_id}/status?project_id={id}` | 推进缺陷状态 |
-| POST | `/media/images?project_id={id}` | 上传待绑定的缺陷图片 |
-| GET/DELETE | `/media/{media_id}/url?project_id={id}` / `/media/{media_id}?project_id={id}` | 刷新图片地址或删除附件 |
+## 数据关系
 
-建议权限点包括 `defect:view`、`defect:create`、`defect:update`、`defect:delete` 和 `defect:transition`。
+```text
+projects
+-> defects.project_id
+users
+-> defects.reporter_id
+defects
+-> media_objects.defect_id
+```
+
+当前已实现：
+
+- 查询项目缺陷列表；
+- 创建缺陷；
+- 查询缺陷详情；
+- 更新缺陷；
+- 删除缺陷；
+- 推进缺陷状态；
+- 富文本 HTML 服务端清洗；
+- 项目删除时清理项目下缺陷。
+- 绑定已上传的 MinIO 图片附件，并在读取时返回短期预签名 URL。
+
+## 权限
+
+| 操作 | 权限 |
+| --- | --- |
+| 查询列表、详情 | `defect:view` |
+| 创建缺陷 | `defect:create` |
+| 更新缺陷 | `defect:update` |
+| 删除缺陷 | `defect:delete` |
+| 推进状态 | `defect:transition` |
+
+管理员和项目创建者默认拥有项目下全部缺陷权限。普通测试人员必须被加入项目并授予对应权限后才能操作。
 
 ## 状态枚举
 
@@ -29,27 +56,64 @@
 | `closed` | 已关闭 |
 | `reopened` | 重新激活 |
 
-后端应校验状态流转合法性，并在非法流转时返回 HTTP `409` 或 `422`。
+后端校验状态流转合法性。非法流转返回 HTTP `409`，响应 `data` 中包含
+`current_status` 和 `target_status`。
 
-## 查询参数
+当前允许的状态流转：
 
-```http
-GET /api/v1/defects?project_id=1&keyword=支付&status=confirmed&urgency=critical&page_size=200
+```text
+new -> active | confirmed | closed
+active -> confirmed | fixed | closed
+confirmed -> fixed | closed
+fixed -> verified | reopened
+verified -> closed | reopened
+closed -> reopened
+reopened -> active | confirmed | fixed | closed
 ```
 
-| 参数 | 必填 | 说明 |
+重复提交当前状态视为幂等成功。
+
+## 查询缺陷列表
+
+| 项目 | 内容 |
+| --- | --- |
+| 接口 | `/defects?project_id={project_id}&keyword={keyword}&status={status}&urgency={urgency}&page=1&page_size=20` |
+| 方法 | `GET` |
+| 认证 | `Authorization: Bearer <access_token>` |
+| 权限 | `defect:view` |
+| 说明 | 分页返回项目下缺陷数据 |
+
+查询参数：
+
+| 参数 | 默认值 | 说明 |
 | --- | --- | --- |
-| `project_id` | 是 | 当前项目 ID |
-| `keyword` | 否 | 按标题、指派人、报告人或内容搜索 |
-| `status` | 否 | 缺陷状态 |
-| `urgency` | 否 | 紧急程度 |
-| `page` / `page_size` | 否 | 分页参数 |
+| `project_id` | 必填 | 当前项目 ID |
+| `keyword` | 空 | 按标题、指派人、报告人账号/姓名或富文本内容搜索 |
+| `status` | 空 | 缺陷状态 |
+| `urgency` | 空 | 紧急程度 |
+| `page` | `1` | 页码，从 1 开始 |
+| `page_size` | `20` | 每页数量，最大 200 |
 
-响应可为数组，也可为 `{items,total,page,page_size}` 分页结构。前端当前兼容 `items`、`records` 和 `data`。
+响应 `data` 结构为：
 
-列表只消费摘要字段；进入 `/defects/{defect_id}` 详情页后，前端调用 `GET /defects/{defect_id}?project_id={id}` 获取正文、附件和最新元数据，避免把列表快照作为详情权威数据。
+```json
+{
+  "items": [],
+  "total": 0,
+  "page": 1,
+  "page_size": 20
+}
+```
 
-## 创建和更新
+## 创建缺陷
+
+| 项目 | 内容 |
+| --- | --- |
+| 接口 | `/defects?project_id={project_id}` |
+| 方法 | `POST` |
+| 权限 | `defect:create` |
+
+请求示例：
 
 ```json
 {
@@ -58,30 +122,45 @@ GET /api/v1/defects?project_id=1&keyword=支付&status=confirmed&urgency=critica
   "bug_type": "functional",
   "urgency": "critical",
   "status": "new",
-  "content_html": "<p>复现步骤...</p><img src=\"/__defect_media__/12\" data-media-id=\"12\" alt=\"checkout.png\">",
+  "content_html": "<p>复现步骤...</p>",
   "media_ids": [12, 13]
 }
 ```
 
+字段说明：
+
 | 字段 | 必填 | 说明 |
 | --- | --- | --- |
-| `title` | 是 | Bug 标题 |
-| `assignee` | 否 | 指派人账号、姓名或用户 ID，具体类型由后端统一 |
+| `title` | 是 | Bug 标题，最长 256 |
+| `assignee` | 否 | 指派人账号、姓名或用户 ID，当前按字符串保存并以 `assignee_name` 返回 |
 | `bug_type` | 是 | `functional`、`ui`、`performance`、`security`、`compatibility`、`data`、`other` |
 | `urgency` | 是 | `low`、`medium`、`high`、`critical` |
-| `status` | 是 | 当前状态；创建时默认建议为 `new` |
-| `content_html` | 是 | 富文本内容 HTML；正文图片使用相对地址 `/__defect_media__/{media_id}` 引用已绑定媒体，不能持久化会过期的预签名 URL |
-| `media_ids` | 否 | 上传接口返回的媒体 ID；创建有附件时传入，无图片时可省略 |
+| `status` | 否 | 当前状态，默认 `new` |
+| `content_html` | 是 | 富文本内容 HTML |
+| `media_ids` | 否 | 通过媒体上传接口取得的对象 ID 列表；创建时默认空数组 |
 
-编辑时不传 `media_ids` 表示保留原附件；传完整 ID 数组表示替换绑定；传 `[]` 表示解绑全部附件。旧客户端不传该字段仍可创建和编辑无图片 Bug。
+创建人自动记录为 `reporter_id`，响应中通过 `reporter_name` 返回用户名或账号。
 
-后端清洗富文本 HTML，禁止脚本、事件属性和不安全 URL，并保留合法的相对图片地址 `/__defect_media__/{media_id}`；`data-media-id` 可以保留，但不是恢复正文图片的唯一依据。占位地址中的 ID 必须同时存在于本次绑定的 `media_ids` 或缺陷已有附件中；前端根据响应的 `attachments[].download_url` 把占位地址替换成当前访问地址。独立选择的图片显示在附件区，粘贴图片在正文显示且不重复出现在附件区。
+## 查询、更新和删除缺陷
 
-## 状态流转
+| 方法 | 接口 | 权限 | 说明 |
+| --- | --- | --- | --- |
+| `GET` | `/defects/{defect_id}?project_id={project_id}` | `defect:view` | 查询详情 |
+| `PUT` | `/defects/{defect_id}?project_id={project_id}` | `defect:update` | 更新缺陷字段 |
+| `DELETE` | `/defects/{defect_id}?project_id={project_id}` | `defect:delete` | 删除缺陷 |
 
-```http
-PUT /api/v1/defects/18/status?project_id=1
-```
+更新请求体与创建请求体基本一致。如果 `status` 发生变化，也会执行状态流转校验。
+更新时 `media_ids` 不传表示保留原附件；传数组表示用该完整列表替换附件绑定，传空数组表示解绑全部附件。
+
+## 推进缺陷状态
+
+| 项目 | 内容 |
+| --- | --- |
+| 接口 | `/defects/{defect_id}/status?project_id={project_id}` |
+| 方法 | `PUT` |
+| 权限 | `defect:transition` |
+
+请求示例：
 
 ```json
 {
@@ -89,7 +168,7 @@ PUT /api/v1/defects/18/status?project_id=1
 }
 ```
 
-响应返回更新后的缺陷对象。若状态已被其他用户修改，建议返回 HTTP `409` 并附带当前状态，前端重新加载列表后再操作。
+响应返回更新后的缺陷对象。若当前状态不能流转到目标状态，返回 HTTP `409`。
 
 ## 响应对象
 
@@ -106,17 +185,36 @@ PUT /api/v1/defects/18/status?project_id=1
   "attachments": [
     {
       "id": 12,
-      "original_filename": "checkout.png",
+      "original_filename": "order-state.png",
       "content_type": "image/png",
       "size_bytes": 183024,
-      "download_url": "https://minio.example/testplatform/...?X-Amz-Signature=...",
-      "created_at": "2026-06-17T08:30:00"
+      "download_url": "http://minio.example/testplatform/...?X-Amz-Signature=...",
+      "created_at": "2026-06-17 07:55:00"
     }
   ],
   "reporter_name": "韩梅梅",
-  "created_at": "2026-06-17T08:00:00",
-  "updated_at": "2026-06-17T09:00:00"
+  "created_at": "2026-06-17 08:00:00",
+  "updated_at": "2026-06-17 09:00:00"
 }
 ```
 
-媒体上传、刷新、删除、格式限制和错误状态详见 [媒体存储接口](api_media.md)。
+## 富文本安全
+
+后端会清洗 `content_html`：
+
+- 删除 `script`、`style`、`iframe`、`object`、`embed` 等不安全标签；
+- 删除所有 `on*` 事件属性；
+- 删除 `javascript:`、`vbscript:` 等不安全 URL；
+- 仅允许 `http`、`https`、相对路径和受限图片 `data:` URL；
+- 不保留内联 `style`。
+
+图片附件不把预签名 URL 持久化进 `content_html`。前端使用 `attachments[].download_url`
+展示图片；地址过期后调用媒体 URL 刷新接口。这样历史缺陷不会依赖已经过期的临时地址。
+
+## 兼容性和迁移
+
+- 缺陷基础表迁移为 `0018_create_defect_tables.py`。
+- 媒体附件表迁移为 `0019_create_media_objects.py`，revision 为 `0019_media_objects`。
+- 旧客户端不传 `media_ids` 时仍可创建缺陷；更新时不传该字段会保留已有附件。
+- 部署前必须执行 `alembic upgrade head`。
+- 媒体接口和部署配置详见 [媒体存储接口文档](api_media.md)。
