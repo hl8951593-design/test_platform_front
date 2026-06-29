@@ -2,6 +2,7 @@ import type { RouteMeta } from "../types";
 
 export const routes: RouteMeta[] = [
   { key: "dashboard", icon: "dashboard", label: "工作台", title: "全局运营仪表盘", variant: "dashboard" },
+  { key: "agents", icon: "smart_toy", label: "TESTAI", title: "TESTAI", subtitle: "创建、观察和治理智能测试运行。", variant: "light" },
   { key: "projects", icon: "folder_special", label: "项目管理", title: "项目管理", subtitle: "监控并管理所有自动化测试项目的进度与覆盖率。", variant: "project" },
   { key: "plans", icon: "event_note", label: "测试计划", title: "自动化测试计划", variant: "light" },
   { key: "flow", icon: "visibility", label: "可视化编排", title: "可视化编排", subtitle: "通过拖拽测试用例与断言节点，组合可执行的自动化测试流程", variant: "dark" },

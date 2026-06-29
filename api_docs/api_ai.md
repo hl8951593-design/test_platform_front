@@ -134,6 +134,198 @@ POST https://api.deepseek.com/chat/completions
 - AI 返回内容会先经过本地 JSON 解析兼容层：去除代码块、提取 JSON 片段、修复尾逗号、未转义引号、字符串中的控制字符、字段名断行等常见模型输出问题。
 - 本地解析仍失败时，`AISkillRunner` 会使用低温 JSON 修复请求重试一次；修复仍失败才返回 `502`。
 
+## Agent Runtime 目标契约
+
+状态：目标契约
+
+Harness+Loop Agent Runtime 按生产级 Agent Run 建模。当前前端已经按以下目标契约接入 `src/api/agents.ts` 和 `/agents` 页面；后端可分阶段落地，但字段语义应保持稳定。
+
+### 创建 Agent Run
+
+| 项目 | 内容 |
+| --- | --- |
+| 接口 | `/agents/runs` |
+| 方法 | `POST` |
+| 认证 | `Authorization: Bearer <access_token>` |
+| 说明 | 创建一次 Agent Run，必须显式携带项目上下文 |
+
+请求示例：
+
+```json
+{
+  "project_id": 7,
+  "conversation_id": "agent-conv-local-...",
+  "intent": "根据登录链路生成场景草稿",
+  "max_iterations": 3,
+  "auto_complete": false
+}
+```
+
+响应示例：
+
+```json
+{
+  "run_id": "agent-run-1",
+  "status": "queued",
+  "runtime_snapshot_id": "snap-1"
+}
+```
+
+### Run 详情与事件
+
+| 接口 | 方法 | 说明 |
+| --- | --- | --- |
+| `/agents/runs/{run_id}` | `GET` | 查询 Run、事件、ToolCall、Approval 和 Migration Block 快照 |
+| `/agents/runs?project_id={project_id}` | `GET` | 目标契约：查询当前项目下历史 Agent Run；当前 `/agents` 前端仍使用本地 history index，不依赖该接口 |
+| `/agents/runs/{run_id}/events` | `GET` | 订阅 EventStore SSE 事件，支持 `Last-Event-ID` |
+| `/agents/runs/{run_id}/cancel` | `POST` | 取消 Run |
+| `/agents/runs/{run_id}/resume` | `POST` | 恢复 Run |
+| `/agents/runs/{run_id}/reconcile` | `POST` | 触发恢复核对 |
+
+Run 状态：
+
+```text
+queued
+running
+paused
+completed
+failed
+cancelled
+migration_blocked
+needs_human
+```
+
+SSE 事件必须以 EventStore 为事实源，前端会发送 `Accept: text/event-stream`，断线续播时携带 `Last-Event-ID`。事件可使用标准 SSE：
+
+```text
+id: 2
+event: model.delta
+data: {"content":"plan"}
+```
+
+也可在 `data` 内返回 EventStore 结构：
+
+```json
+{
+  "event_type": "tool.uncertain",
+  "event_seq": 3,
+  "payload_json": {
+    "tool_call_id": "tool-1"
+  }
+}
+```
+
+### ToolCall、Approval 与 Migration
+
+| 接口 | 方法 | 说明 |
+| --- | --- | --- |
+| `/agents/tool-calls/{tool_call_id}` | `GET` | 查询 ToolCall 详情 |
+| `/agents/runs/{run_id}/approvals` | `GET` | 查询 Run 下的审批记录 |
+| `/agents/tool-calls/{tool_call_id}/approve` | `POST` | 批准待审批 ToolCall |
+| `/agents/tool-calls/{tool_call_id}/reject` | `POST` | 拒绝待审批 ToolCall |
+| `/agents/runs/{run_id}/migration-blocks` | `GET` | 查询 Run 下的迁移阻断 |
+| `/agents/runs/{run_id}/migration-blocks/{block_id}/resolve` | `POST` | 提交迁移阻断解除 |
+
+approve/reject 请求必须携带当前 approval CAS 字段，避免旧审批在上下文变化后继续生效：
+
+```json
+{
+  "input_hash": "hash...",
+  "runtime_snapshot_id": "snap-1",
+  "resource_scope_hash": "scope-hash...",
+  "approval_lineage_id": "lineage-1",
+  "approval_epoch": 3
+}
+```
+
+ToolCall 详情目标字段包括：
+
+```text
+tool_call_id
+tool_name
+tool_version
+status
+effect_submission_state
+idempotency_key
+resolved_side_effect_class
+resolved_replay_policy
+backend_name
+backend_operation
+backend_contract_version
+backend_effect_capability
+input_json_redacted
+output_json_redacted
+required_permissions_json
+current_approval
+recent_reconcile_attempts
+evidence_refs_json
+approval_required
+output_summary
+recovery_decision
+error_code
+error_message
+```
+
+`backend_effect_capability` 必须是 operation 级能力声明，取值为：
+
+```text
+receipt_first
+idempotency_index_only
+legacy_reconcile_only
+legacy_no_receipt
+```
+
+### Readiness Dashboard
+
+| 项目 | 内容 |
+| --- | --- |
+| 接口 | `/agents/dashboard?project_id={project_id}` |
+| 方法 | `GET` |
+| 认证 | `Authorization: Bearer <access_token>` |
+| 说明 | 聚合当前项目的 Agent readiness、checks、metrics、release gate 和 alert summary；后端按 `project_id` 校验项目访问权限 |
+
+响应示例：
+
+```json
+{
+  "readiness": "attention",
+  "checks": [
+    {
+      "key": "live_recovery_attention",
+      "status": "attention",
+      "severity": "P1",
+      "message": "存在未收敛恢复项"
+    }
+  ],
+  "alert_summary": {
+    "P1": 1
+  }
+}
+```
+
+`readiness` 取值为 `pass`、`attention` 或 `blocked`。前端只展示该聚合结果，不自行计算发布门禁。
+
+### Context、Loop、Memory、Runbook 与治理
+
+| 接口 | 方法 | 说明 |
+| --- | --- | --- |
+| `/agents/runs/{run_id}/context-builds` | `GET` | 查询 ContextBuild、上下文降级和 required evidence |
+| `/agents/runs/{run_id}/loop-observations` | `GET` | 查询循环观察、root cause、stop reason 和 mitigation |
+| `/agents/memory-usage-events?run_id={run_id}` | `GET` | 查询本 run Memory 使用证据 |
+| `/agents/memory-usage-events/{usage_event_id}/feedback` | `POST` | 标记 Memory 使用为 `useful`、`misleading` 或 `stale` |
+| `/agents/runs/{run_id}/runbook` | `GET` | 返回 diagnosis、recommendations 和 safe actions |
+
+`safe_actions[]` 可包含 `key`、`label`、`action`、`target_id` 和 `reason`。当前前端只执行 `resume`、`reconcile` 和 `tool_call_detail`，其他 action 必须在后端契约补齐后再接入，不能由前端猜测路径。
+
+治理接口：
+
+| 接口 | 方法 | 说明 |
+| --- | --- | --- |
+| `/agents/metrics?project_id={project_id}` | `GET` | 返回当前项目的 Agent 监控指标摘要 |
+| `/agents/alerts?project_id={project_id}` | `GET` | 返回当前项目的 Agent 告警摘要 |
+| `/agents/release-gates` | `GET` | 返回全局上线门禁状态，仅平台管理员调用；普通项目用户前端不请求该接口 |
+| `/agents/release-gates/promotion?project_id={project_id}&target_level={target_level}` | `GET` | 返回当前项目 promotion gate 摘要，默认 `target_level=L3` |
+
 ## AI Skills
 
 平台 AI 业务能力以正式 skill 包组织。每个 skill 包至少包含：

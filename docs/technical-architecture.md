@@ -1,7 +1,7 @@
 # TestAuto 技术文档
 
 状态：当前实现
-最后核验：2026-06-17
+最后核验：2026-06-27
 
 本文档用于记录 TestAuto 自动化测试平台在开发过程中的功能模块、业务逻辑、数据权限、用户权限以及它们之间的关系。后续新增或修改模块时，应同步更新本文档，避免业务规则只存在于代码或个人记忆中。
 
@@ -51,6 +51,7 @@
 | --- | --- | --- | --- | --- |
 | 登录认证 | `/login` | 已接真实接口 | 用户登录、注册、保存 token、登录后进入工作台 | `/auth/login`、`/auth/register` |
 | 工作台 | `/dashboard` | 前端展示 | 全局测试执行概览、最近运行、AI 诊断入口 | `dashboardStats`、`recentRuns` |
+| TESTAI | `/agents` | 已接目标契约 | 创建 Harness Loop Agent Run，展示 Event Timeline、ToolCall、Approval、Migration Block、Context、Loop、Memory、Runbook 与 readiness；历史当前为本地 index | `/agents/*` |
 | 项目管理 | `/projects` | 已接真实接口 | 项目列表、项目创建、项目数据权限边界入口 | `/projects` |
 | 测试计划 | `/plans` | 已接真实接口 | 按项目维护计划、绑定场景版本与环境、配置调度、手动运行、查看历史、导入导出 | `/test-plans`、`/test-plan-runs`、Scenario 资产 |
 | 可视化编排 | `/flow` | 已接真实接口 | 流程节点编排、节点配置、保存、导入导出和流程试运行 | `/flows`、HTTP/WebSocket 用例资产 |
@@ -280,6 +281,9 @@ Authorization: Bearer <access_token>
 | 项目 | `project_id`、`owner_team_id` | 用户所属团队或授权项目 |
 | 测试计划 | `plan_id`、`project_id` | 跟随项目权限 |
 | 测试场景 | `scenario_id`、`project_id` | 跟随项目权限 |
+| Agent Run | `run_id`、`project_id`、`conversation_id`、`user_id` | 跟随项目权限和创建者/管理员可见性 |
+| Agent ToolCall / Approval / Migration | `tool_call_id`、`approval_id`、`block_id`、`run_id` | 跟随所属 Agent Run；审批必须校验 CAS 字段 |
+| Agent 治理摘要 | `project_id` | Dashboard、metrics、alerts 和 promotion gate 跟随项目权限；全局 release gates 仅平台管理员可见 |
 | 接口用例 | `api_case_id`、`project_id`、`environment_id` | 跟随项目和环境权限 |
 | 执行记录 | `execution_id`、`project_id`、`trigger_user_id` | 项目内可见，个人触发记录可单独筛选 |
 | 测试报告 | `report_id`、`execution_id`、`project_id` | 跟随执行记录权限 |
@@ -329,6 +333,7 @@ flowchart LR
 | --- | --- | --- | --- |
 | `/login` | 认证 | 否 | 无 |
 | `/dashboard` | 工作台 | 是 | `dashboard:view` |
+| `/agents` | TESTAI | 是 | `agent:view`、`agent:run:create`、`agent:run:control`、`agent:approval:decide` |
 | `/projects` | 项目管理 | 是 | `project:view` |
 | `/plans` | 测试计划 | 是 | `plan:view`、`plan:create`、`plan:update`、`plan:delete`、`plan:run`、`plan:history:delete` |
 | `/flow` | 可视化编排 | 是 | `flow:view`、`flow:update`、`flow:run` |

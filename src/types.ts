@@ -1,5 +1,6 @@
 export type RouteKey =
   | "dashboard"
+  | "agents"
   | "projects"
   | "plans"
   | "flow"

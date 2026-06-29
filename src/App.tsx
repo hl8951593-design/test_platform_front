@@ -6,6 +6,7 @@ import { ActionButton, IconButton } from "./components/Buttons";
 import { Icon } from "./components/Icon";
 import { routes } from "./data/mock";
 import { ApiPage } from "./pages/ApiPage";
+import { AgentsPage } from "./pages/AgentsPage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { EnvironmentConfigsPage } from "./pages/EnvironmentConfigsPage";
 import { ExecutionsPage } from "./pages/ExecutionsPage";
@@ -69,6 +70,8 @@ function routeContent({
   switch (route) {
     case "dashboard":
       return <DashboardPage onAction={onAction} />;
+    case "agents":
+      return <AgentsPage projectId={activeProjectId} />;
     case "projects":
       return (
         <ProjectsPage

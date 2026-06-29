@@ -949,16 +949,21 @@ function RichTextContent({ attachments, className, html, projectId }: { attachme
     }
   };
 
+  const openPreviewFromTarget = (target: EventTarget | null) => {
+    const image = target instanceof Element ? target.closest("img") : null;
+    if (!image) return;
+    const index = Number(image.getAttribute("data-preview-index"));
+    if (Number.isInteger(index) && previewImages[index]) setPreviewIndex(index);
+  };
+
   return <>
     <div
       className={className}
       dangerouslySetInnerHTML={{ __html: renderedHtml || "暂无内容" }}
-      onDoubleClick={(event) => {
-        const image = event.target instanceof Element ? event.target.closest("img") : null;
-        if (!image) return;
-        const index = Number(image.getAttribute("data-preview-index"));
-        if (Number.isInteger(index) && previewImages[index]) setPreviewIndex(index);
+      onClick={(event) => {
+        if (event.detail >= 2) openPreviewFromTarget(event.target);
       }}
+      onDoubleClick={(event) => openPreviewFromTarget(event.target)}
       onError={(event) => void refreshInlineImage(event.target)}
     />
     {previewIndex !== null && previewImages[previewIndex] && (

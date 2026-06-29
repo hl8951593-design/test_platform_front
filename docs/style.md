@@ -1,7 +1,7 @@
 # TestAuto 前端 UI 风格规范
 
 状态：生效
-最后核验：2026-06-24
+最后核验：2026-06-27
 
 ## 1. 规范定位
 
@@ -107,6 +107,21 @@
 - **详情页**：返回入口 → 标题与状态 → 主操作 → 分区内容；高风险操作与普通操作分组。
 - **编辑器/工作台**：资产或导航栏 → 主画布/编辑区 → 属性或结果栏。各区域优先独立滚动，避免整个页面横向溢出。
 - **弹窗**：标题和说明固定在顶部，长内容独立滚动，操作区固定在底部。
+
+### 6.3 TESTAI 工作台
+
+- TESTAI 使用 Codex 式三栏布局：左侧本地 history 和运行控制，中间 `testagnet` 对话区与 composer，右侧 Run/Tool/Approval/Memory/Runbook/Dashboard Inspector。
+- `/agents` 页面外层应用导航和顶栏遵循项目统一样式；Codex 式视觉只作用于 Agent 内部工作线程、history rail、工具调用活动行和 composer，不改写全局菜单形态。
+- 中央 transcript 只展示用户目标、Agent 回复、思考态、工具调用、审批、迁移、必要的低层事件兜底和结果；`run.*` 生命周期事件只作为状态判断和摘要数据源，不展示为对话卡片；不展示静态系统说明卡，也不展示 dashboard/readiness 权限失败这类全局状态文案。
+- 中央空状态标题使用“我们应该做什么”；用户发送消息并创建 Run 后，该空状态区域必须消失，避免和用户目标或等待态并存。
+- 左右栏为辅助信息，不得挤压中间 transcript；宽屏保留右侧 Inspector，窄桌面可隐藏右侧详情并保留主线程。
+- 中间 transcript 必须以工作线程阅读体验为主：连续 `assistant.delta`、`assistant.message`、`model.delta` 和 `model.message` 合并为一段 Agent 回复并渲染 Markdown 段落、列表、粗体和行内代码，不允许把流式文本片段拆成多条对话卡或裸露 Markdown 标记。
+- 工具、命令、执行和输出结果必须按事件位置以轻量内联折叠块展示，折叠态至少露出工具名、状态和一行输出预览，展开态展示 redacted input/output；右侧 Inspector 只作为详情补充，不能替代中央线程中的调用痕迹。
+- `run.queued`、`run.started`、`run.completed` 等 `run.*` 生命周期事件不进入中央 transcript；其他 `*.started`、`*.completed` 低层原始 payload 默认折叠为“原始输出”，用户需要排查时再展开查看 JSON，避免 start/completed 事件把主线程撑成日志面板。
+- Composer 的 Enter 键发送必须符合对话工具习惯，Shift+Enter 才换行；发送成功后输入框清空。等待模型或工具返回时，线程中展示带点状动效和耗时计数的“正在思考”轻量活动行，真实回复到达后自动移除。
+- ToolCall、Approval、Migration、ContextBuild 和 LoopObservation 在时间线中以紧凑折叠块呈现，完整 JSON、权限、CAS、Memory 证据和 runbook 诊断进入右侧详情或可展开区域。
+- 历史列表必须明确本地 MVP 与服务端历史的边界，不能用视觉文案暗示跨设备历史已经可用。
+- 历史项的置顶、重命名、导出和删除使用图标按钮时必须提供 `aria-label`；快捷键入口不能替代可见按钮。
 
 所有布局必须允许长名称、长 JSON、错误信息和空数据存在。不得以固定示例内容作为唯一尺寸依据。
 

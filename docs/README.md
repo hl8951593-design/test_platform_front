@@ -21,6 +21,7 @@
 | [test-plan-architecture.md](test-plan-architecture.md) | 测试计划数据模型、版本、调度和执行边界 |
 | [visual-flow-architecture.md](visual-flow-architecture.md) | 可视化编排节点、连线、变量关系和执行模型 |
 | [defect-tracking-architecture.md](defect-tracking-architecture.md) | 缺陷记录、富文本内容、图片附件和 Bug 状态流转流程 |
+| [agent-runtime-frontend-architecture.md](agent-runtime-frontend-architecture.md) | Harness Loop Agent Run、事件流、ToolCall、审批和迁移阻断前端架构 |
 | [../api_docs/api_environment_configs.md](../api_docs/api_environment_configs.md) | 环境配置接口与数据关系 |
 
 ## 场景执行契约
