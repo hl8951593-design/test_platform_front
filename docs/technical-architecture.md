@@ -1,7 +1,7 @@
 # TestAuto 技术文档
 
 状态：当前实现
-最后核验：2026-06-27
+最后核验：2026-06-30
 
 本文档用于记录 TestAuto 自动化测试平台在开发过程中的功能模块、业务逻辑、数据权限、用户权限以及它们之间的关系。后续新增或修改模块时，应同步更新本文档，避免业务规则只存在于代码或个人记忆中。
 
@@ -29,11 +29,12 @@
 | 路径 | 说明 |
 | --- | --- |
 | `src/App.tsx` | 应用路由壳、导航、顶部栏、登录成功跳转 |
-| `src/api/` | 后端接口封装 |
+| `src/api/` | 后端接口封装；Agent SSE 通过 `agentStream.ts` 使用带鉴权的 fetch stream |
 | `src/components/` | 通用 UI 组件 |
 | `src/data/` | 当前前端 mock 数据和路由元数据 |
 | `src/pages/` | 业务页面 |
 | `src/types.ts` | 共享类型定义 |
+| `src/types/agents.ts` | Harness Loop Agent 前端契约类型 |
 | `src/test/` | 测试初始化 |
 
 ## 配套文档
@@ -51,7 +52,7 @@
 | --- | --- | --- | --- | --- |
 | 登录认证 | `/login` | 已接真实接口 | 用户登录、注册、保存 token、登录后进入工作台 | `/auth/login`、`/auth/register` |
 | 工作台 | `/dashboard` | 前端展示 | 全局测试执行概览、最近运行、AI 诊断入口 | `dashboardStats`、`recentRuns` |
-| TESTAI | `/agents` | 已接目标契约 | 创建 Harness Loop Agent Run，展示 Event Timeline、ToolCall、Approval、Migration Block、Context、Loop、Memory、Runbook 与 readiness；历史当前为本地 index | `/agents/*` |
+| TESTAI | `/agents` | 已接当前核心契约 | 创建 Harness Loop Agent Run，展示多轮 conversation、Agent Markdown 回复、ToolCall、Approval、Migration Block、Context、Loop、Memory、Runbook 与 readiness；后端已提供 conversation list/runs/transcript/export，当前前端仍以本地 history 作为 MVP index，打开历史时用服务端 transcript 校准 | `/agents/*` |
 | 项目管理 | `/projects` | 已接真实接口 | 项目列表、项目创建、项目数据权限边界入口 | `/projects` |
 | 测试计划 | `/plans` | 已接真实接口 | 按项目维护计划、绑定场景版本与环境、配置调度、手动运行、查看历史、导入导出 | `/test-plans`、`/test-plan-runs`、Scenario 资产 |
 | 可视化编排 | `/flow` | 已接真实接口 | 流程节点编排、节点配置、保存、导入导出和流程试运行 | `/flows`、HTTP/WebSocket 用例资产 |
@@ -432,3 +433,5 @@ flowchart LR
 | 2026-06-17 | 新增缺陷跟踪模块，支持 Bug 记录、富文本内容、独立图片附件和状态流转 | 缺陷跟踪、媒体存储、接口契约 |
 | 2026-06-17 | 缺陷列表改为摘要视图，状态操作收纳到三点菜单，编辑和删除迁移到独立详情路由 | 缺陷跟踪、应用路由 |
 | 2026-06-17 | 场景组合新增前置、主流程、后置步骤阶段及失败后持续清理语义 | 场景组合、执行架构、接口契约 |
+| 2026-06-30 | `/agents` 工作台更新为当前核心契约：支持本地多轮 conversation、服务端 transcript 校准、Run summary 终态校准、SSE snapshot 补拉、Markdown 回复渲染、ToolCall/Approval/Migration/Memory/Runbook/Dashboard 治理面板和 Agent Skill catalog 元数据边界 | TESTAI、Agent Runtime、接口契约 |
+| 2026-06-30 | 文档收敛：Agent 原型和专项开发计划合并到当前架构与主开发计划，`api_docs/` 只保留后端 API 契约镜像 | 文档工程 |

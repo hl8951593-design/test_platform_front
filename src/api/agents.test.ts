@@ -11,8 +11,10 @@ import {
   getAgentMigrationBlocks,
   getAgentReleaseGatePromotion,
   getAgentReleaseGates,
+  getAgentConversationTranscript,
   getAgentRun,
   getAgentRunbook,
+  getAgentSkills,
   getAgentToolCall,
   listAgentRuns,
   rejectAgentToolCall,
@@ -195,6 +197,65 @@ describe("Agent API", () => {
       intent: "生成登录场景",
       status: "completed",
     }));
+  });
+
+  it("loads conversation transcript within the selected project scope", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse({
+      conversation: { conversation_id: "agent-conv-local-1" },
+      turns: [{
+        run: {
+          run_id: "agent-run-1",
+          project_id: 7,
+          conversation_id: "agent-conv-local-1",
+          intent: "第一轮目标",
+          status: "completed",
+          current_iteration: 1,
+          current_step_index: 0,
+          max_iterations: 3,
+          runtime_snapshot_id: "snap-1",
+          last_event_sequence: 4,
+          migration_block_count: 0,
+          created_at: "2026-06-30T00:00:00Z",
+          updated_at: "2026-06-30T00:00:01Z",
+        },
+        assistant_message: "第一轮回复",
+        latest_event_sequence: 4,
+        updated_at: "2026-06-30T00:00:01Z",
+      }],
+    }));
+
+    const transcript = await getAgentConversationTranscript(7, "agent-conv-local-1");
+
+    expect(String(fetchMock.mock.calls[0][0])).toContain(
+      "/agents/conversations/agent-conv-local-1/transcript?project_id=7",
+    );
+    expect(transcript.conversationId).toBe("agent-conv-local-1");
+    expect(transcript.runs[0]).toEqual(expect.objectContaining({
+      runId: "agent-run-1",
+      intent: "第一轮目标",
+      status: "completed",
+    }));
+    expect(transcript.runs[0].events[0]).toEqual(expect.objectContaining({
+      event: "model.completed",
+      payload: { content: "第一轮回复" },
+      sequence: 4,
+    }));
+  });
+
+  it("lists agent skill metadata without loading skill bodies", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse([
+      { name: "general-testing-answer", description: "direct testing Q&A", body: "hidden" },
+      { name: "scenario-composition", description: "scenario draft workflow" },
+    ]));
+
+    const skills = await getAgentSkills();
+
+    expect(String(fetchMock.mock.calls[0][0])).toContain("/agents/skills");
+    expect(skills).toEqual([
+      { name: "general-testing-answer", description: "direct testing Q&A" },
+      { name: "scenario-composition", description: "scenario draft workflow" },
+    ]);
+    expect(Object.keys(skills[0])).toEqual(["name", "description"]);
   });
 
   it("wraps detail and governance endpoints used by the Agent page", async () => {

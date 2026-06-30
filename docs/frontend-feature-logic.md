@@ -1,7 +1,7 @@
 # 前端功能逻辑说明
 
 状态：当前实现
-最后核验：2026-06-27
+最后核验：2026-06-30
 
 本文档记录 TestAuto 前端当前已经实现的核心功能逻辑，作为后续开发、联调和排查问题时的依据。代码以 `src/App.tsx`、`src/api/`、`src/pages/PlansPage.tsx`、`src/pages/ApiPage.tsx`、`src/pages/EnvironmentConfigsPage.tsx`、`src/pages/DefectsPage.tsx`、`src/pages/AgentsPage.tsx` 为主。
 
@@ -23,11 +23,12 @@
 
 页面入口为 `/agents`，可见模块名为 TESTAI，主文件为 `src/pages/AgentsPage.tsx`。该页面按后端 Harness+Loop Agent 目标契约先行接入前端骨架，后端未实现或未返回的数据保持 loading、empty 或 error 状态，不在前端模拟运行结果。
 
-Agent 类型位于 `src/types/agents.ts`，普通 JSON API 统一封装在 `src/api/agents.ts`，SSE fetch stream 和 parser 位于 `src/api/agentStream.ts`：
+Agent 类型位于 `src/types/agents.ts`，普通 JSON API 统一封装在 `src/api/agents.ts`，SSE fetch stream 和 parser 位于 `src/api/agentStream.ts`。`AgentSkill` 只承载后端 Skill catalog 元数据，前端不读取或展示 `SKILL.md` 正文或 Skill 私有资源，也不依赖后端私有 `triggers`、`guard_unsupported_capability`、`routing_requires_tool`、`routing_required_tool_after_success`、`guard_*` / `routing_*` hints 或 ToolSpec 后端私有执行/修复字段：
 
 | 接口 | 方法 | 说明 |
 | --- | --- | --- |
 | `/agents/dashboard?project_id={project_id}` | `GET` | 查询当前项目 readiness、checks 和告警摘要 |
+| `/agents/skills` | `GET` | 查询 Agent Skill catalog 元数据 `{name,description}`，用于诊断或能力展示 |
 | `/agents/runs` | `POST` | 创建 Agent Run，必须携带当前 `project_id`、`conversation_id`、`intent`、`max_iterations` 和 `auto_complete` |
 | `/agents/runs/{run_id}` | `GET` | 查询 Run 详情、事件、ToolCall、Approval 和 Migration Block |
 | `/agents/runs/{run_id}/events` | `GET` | 订阅 Agent Run SSE 事件 |
@@ -44,19 +45,27 @@ Agent 类型位于 `src/types/agents.ts`，普通 JSON API 统一封装在 `src/
 | `/agents/runs/{run_id}/loop-observations` | `GET` | 查询 LoopObservation |
 | `/agents/memory-usage-events?run_id={run_id}` | `GET` | 查询 Memory 使用证据 |
 | `/agents/memory-usage-events/{usage_event_id}/feedback` | `POST` | 提交 Memory feedback |
+| `/agents/runs/{run_id}/events/snapshot?after_sequence={seq}` | `GET` | SSE 中断、空流或纯 heartbeat 后补拉事件，使用 `events`、`next_after_sequence` 和 `terminal` 恢复 |
+| `/agents/runs/{run_id}/summary` | `GET` | terminal 后校准最终状态、`assistant_message`、`assistant_visible`、模型调用和计数摘要 |
+| `/agents/conversations?project_id={project_id}` | `GET` | 服务端 conversation 列表契约；当前页面尚未用它替换本地 history index |
+| `/agents/conversations/{conversation_id}/runs?project_id={project_id}` | `GET` | 查询指定 conversation 下的 run 列表；当前页面主要通过 transcript 恢复多轮内容 |
+| `/agents/conversations/{conversation_id}/transcript?project_id={project_id}` | `GET` | 打开或刷新历史 conversation 时读取服务端 transcript；失败时保留本地 history index |
+| `/agents/conversations/{conversation_id}/export?project_id={project_id}` | `GET` | 服务端 conversation 调试包导出契约；当前页面导出仍是本地已加载快照 |
 | `/agents/runs/{run_id}/runbook` | `GET` | 查询 runbook diagnosis 和 safe actions |
 | `/agents/metrics?project_id={project_id}`、`/agents/alerts?project_id={project_id}`、`/agents/release-gates/promotion?project_id={project_id}&target_level=L3` | `GET` | 查询当前项目治理摘要，供右侧 Dashboard/Release Gate 展示 |
 | `/agents/release-gates` | `GET` | 全局发布门禁视图，仅平台管理员调用；普通项目用户前端不请求该接口 |
 
-页面采用 Codex 式三栏工作台：左侧为新建对话、本地 conversation/run history、搜索、状态筛选、重命名、置顶、删除、导出和当前 Run 摘要；中央对话区名称为 `testagnet`，底部为目标输入框；右侧 Inspector 提供 Run、Tool、Approval、Memory、Runbook、Dashboard tabs。Agent 回复、后端返回的 `tool_calls`、pending approval、migration block、context build 和 loop observation 进入中央对话区域，选中 ToolCall 后在右侧查看完整输入、输出、权限、错误和 reconcile attempts。Readiness checks 不进入中央对话流，只在顶部 Readiness pill 和右侧 Dashboard tab 展示。`run.*` 生命周期事件只用于刷新 Run 状态和判断终态，不作为对话消息展示。中央线程不展示静态系统引导卡，也不把 dashboard/readiness 权限失败提示作为“状态更新”消息插入对话流。治理摘要请求必须携带当前 `project_id`；未选择项目时不请求项目级治理接口，非管理员用户不请求全局 `/agents/release-gates`。
+页面采用 Codex 式三栏工作台：左侧为新建对话、本地 conversation history、搜索、状态筛选、重命名、置顶、删除、导出和当前状态摘要；同一 `conversation_id` 下的多轮 run 只占用一条本地历史记录，记录指向该会话最新 run；中央对话区名称为 `testagnet`，底部为目标输入框；右侧 Inspector 默认收起，通过中央线程头部的详情按钮展开，展开后提供 Run、Tool、Approval、Memory、Runbook、Dashboard tabs。桌面端 `/agents` 工作台固定在浏览器视口内，页面外层不产生纵向滚动；长对话、长 JSON 和左侧历史由中央 transcript、折叠块或 history rail 自己滚动。普通工作区只展示标题、状态、循环进度、自动完成、工具名和治理结果等可读信息，不把 `conversation_id`、`run_id`、`runtime_snapshot_id`、hash、sequence 等机器标识作为卡片摘要或 Run Summary 展示；这些字段仍作为 API、本地索引、审批提交和导出数据保留。Agent 回复、后端返回的 `tool_calls`、pending approval、migration block、context build 和 loop observation 进入中央对话区域；中央线程按当前本地 conversation 的 turn 列表渲染，新 prompt 创建的新 run 追加在同一线程底部，不能覆盖上一轮用户目标或 Agent 回复。选中 ToolCall 后会展开右侧并切到 Tool tab，以查看完整输入、输出、权限、错误和 reconcile attempts。Readiness checks 不进入中央对话流，只在顶部 Readiness pill 和右侧 Dashboard tab 展示。`run.*` 生命周期事件只用于刷新 Run 状态和判断终态，不作为对话消息展示。中央线程不展示静态系统引导卡，也不把 dashboard/readiness 权限失败提示作为“状态更新”消息插入对话流。治理摘要请求必须携带当前 `project_id`；未选择项目时不请求项目级治理接口，非管理员用户不请求全局 `/agents/release-gates`。
 
-中央工作线程会把连续的 `assistant.delta`、`assistant.message`、`model.delta` 和 `model.message` 合并为一条 Agent 回复并渲染 Markdown 段落、列表、粗体和行内代码，不把流式 token、文本片段或 Markdown 标记拆成多条对话。高频 SSE delta 会先进入前端缓冲队列，再按 `requestAnimationFrame` 批量提交 React 状态；中央线程自动滚动也按动画帧合并并直接设置 `scrollTop`，避免逐 token 重渲染和 smooth scroll 动画堆叠。`run.queued`、`run.started`、`run.completed` 等 `run.*` 生命周期事件只作为状态判断、终态校准和侧栏摘要的数据源，不进入中央线程。`tool.*` 事件按 `tool_call_id` 匹配后端返回的 ToolCall，并在同一线程位置以轻量折叠块展示工具名称、执行状态和输出预览，展开后展示 redacted input/output、权限和恢复信息；ToolCall 折叠块默认收起。只有无法匹配成上层 ToolCall 的非 `run.*` 低层事件才作为事件卡兜底显示，所有低层原始 payload 默认折叠为“原始输出”，避免工具调用或 start/completed JSON 把主线程撑成日志面板。
+中央工作线程只把用户可见 assistant 内容渲染成 Agent 回复：`model.delta.payload.content` 按顺序追加，`model.markdown_normalized.payload.content` 在 `replace_content=true` 时替换当前气泡，`model.completed.payload.content` 冻结最终完整回复，`run.completed.result.message` 和 `GET /agents/runs/{run_id}/summary.assistant_message` 作为终态权威回复校准。`model.delta.payload.content` 可能是多个 token 合并后的微批，前端不假设一个事件等于一个 token。Agent 回复渲染为 GitHub Flavored Markdown，支持段落、标题、无序列表、有序列表、表格、代码围栏、引用、分隔线、粗体和行内代码，不把 ` ``` `、`---`、`1.`、`| 表头 |` 这类块级 Markdown 标记拼进普通段落。高频 SSE delta 会先进入前端缓冲队列，再按 `requestAnimationFrame` 批量提交 React 状态；中央线程自动滚动也按动画帧合并并直接设置 `scrollTop`，避免逐 token 重渲染和 smooth scroll 动画堆叠。
 
-SSE 使用 `requestEventStreamWithAuth`，带 Bearer Token、`Accept: text/event-stream` 和 `Last-Event-ID`；事件解析兼容 `event:` 字段、heartbeat 和 data 内携带 `event_type` 的 EventStore 回放格式。事件流异常中断后最多自动重连 3 次，每次携带最后收到的事件序号。`tool.*` 事件会拉取 ToolCall 详情；`approval.*`、`migration.*`、`context.*`、`loop.*` 和 `memory.*` 事件会刷新对应二级资源；`run.*` 事件会读取 Run 详情校准终态。
+`run.queued`、`run.started`、普通 `run.completed` 等 `run.*` 生命周期事件只作为状态判断、终态校准和侧栏摘要的数据源，不进入中央线程；`run.failed(error_code=agent_run_stale_worker_lost)` 会立即结束“正在思考”，展示后端中断和可重试状态。`tool.*` 事件按 `tool_call_id` 匹配后端返回的 ToolCall，并在同一线程位置以轻量折叠块展示业务化工具名称、执行状态和关键参数摘要，展开后展示 redacted input/output、权限和恢复信息；ToolCall 折叠块默认收起。`report.read_summary` 的结构化摘要（最近报告、失败样本、状态统计和返回页内用例通过率）属于 ToolCall output，从 ToolCall 详情读取，不升级成新的顶层报告 API。`tool.result_observed` 表示工具结果已经回灌给下一轮模型上下文，UI 继续等待后续 `model.delta` 或 `run.completed`，不会把工具卡本身当成最终 assistant 回复。模型内部 `agent_tool_request` 代码块、包含 `tool_name` 的工具请求 JSON、`model.tool_request_*`、`model.required_tool_*`（可能携带 `after_tool` 与 `required_tool` 说明漏调用修复）和 `tool.planned/running/completed` 这类低层过程事件不作为普通 Agent 回复或事件卡显示；`context.history_compacted` 只作为审计事件显示，不生成 assistant 气泡。只有无法匹配成上层 ToolCall 的非 `run.*` 低层异常/兜底事件才作为事件卡显示，事件卡标题映射为中文，所有低层原始 payload 默认折叠为“原始输出”。
 
-创建 Run 前必须选择项目。前端生成并复用本地 `conversation_id` 支持多轮 prompt；由于当前后端没有服务端 conversation/run list，历史列表只保存本地 history index，跨设备历史仍是目标契约。前端不直接调用模型、不绕过权限，也不推断审批或迁移结果。`migration_blocked`、`uncertain`、`approval.superseded` 等高风险状态会以警告或危险语义展示。Approval approve/reject 必须提交 `input_hash`、`runtime_snapshot_id`、`resource_scope_hash`、`approval_lineage_id` 和 `approval_epoch`。Runbook safe actions 以后端返回为准，只将 `resume`、`reconcile` 和 `tool_call_detail` 映射到已存在操作，其他 action 展示为目标契约限制。
+SSE 使用 `requestEventStreamWithAuth`，带 Bearer Token、`Accept: text/event-stream` 和按 run 独立保存的 `Last-Event-ID`；新 run 不继承上一 run 的 cursor。事件解析兼容 `event:` 字段、heartbeat 和 data 内携带 `event_type` 的 EventStore 回放格式。事件流异常中断后最多自动重连 3 次，每次携带当前 run 最后收到的事件序号；如果断线、空流或只有 heartbeat，则通过 `/agents/runs/{run_id}/events/snapshot?after_sequence={seq}` 按 `next_after_sequence` 补拉。`tool.*` 事件会拉取 ToolCall 详情；`approval.*`、`migration.*`、`context.*`、`loop.*` 和 `memory.*` 事件会刷新对应二级资源；terminal 后优先读取 `/agents/runs/{run_id}/summary` 校准最终状态和 `assistant_message`，summary 不可用时回退 Run 详情。
 
-Composer 支持 Enter 直接发送，Shift+Enter 保留换行；Run 创建成功后立即清空输入框，并以本次提交的 intent 固定用户气泡。尚未发送目标时，中央空状态提示为“我们应该做什么”；用户发送消息并创建 Run 后，该空状态提示立即消失。等待后端返回 assistant/model 内容或 ToolCall 前，中央线程展示“正在思考”动效和耗时计数；收到正常回复、工具调用、终态或错误后该等待态消失，线程继续展示真实后端事件。
+创建 Run 前必须选择项目。前端生成并复用本地 `conversation_id` 支持多轮 prompt；只有点击“新建对话”才生成新的本地 conversation id。后端已经提供服务端 conversation/run list、transcript 和 export 契约，但当前页面历史列表仍保存本地 history index，服务端列表接入是下一阶段工作；本地 history 按 `conversationId || runId` 去重，同一会话继续发送 prompt 时会以最新 run 更新原会话记录，而不是新增一条历史对话。多轮归并以发起本轮请求时的本地 conversation 为准，即使后端创建响应或 Run 详情临时返回了不同 `conversation_id`，当前页面也不会因此拆出新的历史卡片；中央线程同样以该本地 conversation 为边界保留多轮 turn，第二个问题会追加到第一轮问答下方，而不是清空第一轮内容。服务端 transcript 的 `turns[].assistant_message` 会在 API 层合成为可渲染 Agent 回复；如果 transcript 只提供 run 摘要，页面合并时保留本地已收到的完整事件和治理资源，避免摘要刷新把上一轮回复清空。只有用户显式点击“新建对话”才开始新的本地会话。用户打开或创建某个 run 后，左侧历史对该 active run 优先展示后端详情或 SSE 校准后的实时状态，并把该状态同步回本地 history，避免本地旧 `failed` 状态覆盖正在运行或正在思考的任务。前端不直接调用模型、不绕过权限，也不推断审批或迁移结果。`migration_blocked`、`uncertain`、`approval.superseded` 等高风险状态会以警告或危险语义展示。Approval approve/reject 必须在内部提交 `input_hash`、`runtime_snapshot_id`、`resource_scope_hash`、`approval_lineage_id` 和 `approval_epoch`，但审批卡片不把这些 CAS/hash 字段作为用户可见摘要。Runbook safe actions 以后端返回为准，只将 `resume`、`reconcile` 和 `tool_call_detail` 映射到已存在操作，其他 action 展示为目标契约限制。
+
+Composer 支持 Enter 直接发送，Shift+Enter 保留换行；Run 创建成功后立即清空输入框，并以本次提交的 intent 固定用户气泡。尚未发送目标时，中央空状态提示为“我们应该做什么”；用户发送消息并创建 Run 后，该空状态提示立即消失。等待后端返回 assistant 可见内容或终态前，中央线程展示“正在思考”动效和耗时计数；工具调用和 `tool.result_observed` 可以先展示审计事实，但不会单独结束等待态。收到正常 assistant 回复、终态或错误后该等待态消失，线程继续展示真实后端事件。
 
 快捷键支持：`Ctrl/Meta + Enter` 发送、`Ctrl/Meta + .` 停止、`Ctrl/Meta + K` 聚焦历史搜索、`Ctrl/Meta + N` 新建本地对话。时间线在新事件、ToolCall、Approval 或 Migration 到达时自动滚动到最新内容。
 

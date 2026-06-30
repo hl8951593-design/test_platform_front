@@ -1,7 +1,12 @@
 import { requestEventStreamWithAuth } from "./client";
-import type { AgentRunEvent } from "../types/agents";
+import { requestWithAuth } from "./client";
+import type { AgentRunEvent, AgentRunEventSnapshot } from "../types/agents";
 
 type BackendRecord = Record<string, unknown>;
+export interface AgentRunEventStreamResult {
+  eventCount: number;
+  heartbeatCount: number;
+}
 
 function asRecord(value: unknown): BackendRecord {
   return value && typeof value === "object" && !Array.isArray(value) ? value as BackendRecord : {};
@@ -25,6 +30,15 @@ function mapEvent(value: unknown): AgentRunEvent {
     event: String(source.event_type ?? source.event ?? source.type ?? "message"),
     payload: asRecord(source.payload_json ?? source.payload ?? source.data),
     createdAt: optionalString(source.created_at ?? source.createdAt),
+  };
+}
+
+function mapEventSnapshot(value: unknown): AgentRunEventSnapshot {
+  const source = asRecord(value);
+  return {
+    events: Array.isArray(source.events) ? source.events.map(mapEvent) : [],
+    nextAfterSequence: optionalNumber(source.next_after_sequence ?? source.nextAfterSequence),
+    terminal: Boolean(source.terminal ?? false),
   };
 }
 
@@ -63,11 +77,32 @@ export function parseAgentSseChunk(chunk: string): AgentRunEvent | undefined {
   };
 }
 
+export function isAgentHeartbeatSseChunk(chunk: string) {
+  let event = "message";
+  let hasData = false;
+
+  for (const rawLine of chunk.replace(/\r\n/g, "\n").split("\n")) {
+    const line = rawLine.trimEnd();
+    if (!line) continue;
+    if (line.startsWith(":")) return true;
+    if (line.startsWith("event:")) event = line.slice(6).trim();
+    if (line.startsWith("data:")) hasData = true;
+  }
+
+  return event === "heartbeat" || (!hasData && event === "message");
+}
+
+export async function getAgentRunEventSnapshot(runId: string, afterSequence?: number) {
+  const query = afterSequence === undefined ? "" : `?after_sequence=${encodeURIComponent(String(afterSequence))}`;
+  const result = await requestWithAuth<BackendRecord>(`/agents/runs/${runId}/events/snapshot${query}`);
+  return mapEventSnapshot(result);
+}
+
 export async function subscribeAgentRunEvents(
   runId: string,
   onEvent: (event: AgentRunEvent) => void,
   options: { lastEventId?: number; signal?: AbortSignal } = {},
-) {
+): Promise<AgentRunEventStreamResult> {
   const headers = new Headers();
   if (options.lastEventId !== undefined) headers.set("Last-Event-ID", String(options.lastEventId));
   const response = await requestEventStreamWithAuth(`/agents/runs/${runId}/events`, {
@@ -77,6 +112,20 @@ export async function subscribeAgentRunEvents(
   const reader = response.body!.getReader();
   const decoder = new TextDecoder("utf-8");
   let buffer = "";
+  let eventCount = 0;
+  let heartbeatCount = 0;
+
+  const consumeChunk = (chunk: string) => {
+    if (isAgentHeartbeatSseChunk(chunk)) {
+      heartbeatCount += 1;
+      return;
+    }
+    const event = parseAgentSseChunk(chunk);
+    if (event) {
+      eventCount += 1;
+      onEvent(event);
+    }
+  };
 
   while (true) {
     const { value, done } = await reader.read();
@@ -84,13 +133,10 @@ export async function subscribeAgentRunEvents(
     buffer += decoder.decode(value, { stream: true });
     const chunks = buffer.split(/\n\n|\r\n\r\n/);
     buffer = chunks.pop() ?? "";
-    chunks.forEach((chunk) => {
-      const event = parseAgentSseChunk(chunk);
-      if (event) onEvent(event);
-    });
+    chunks.forEach(consumeChunk);
   }
 
   buffer += decoder.decode();
-  const event = buffer.trim() ? parseAgentSseChunk(buffer) : undefined;
-  if (event) onEvent(event);
+  if (buffer.trim()) consumeChunk(buffer);
+  return { eventCount, heartbeatCount };
 }

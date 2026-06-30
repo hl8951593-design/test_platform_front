@@ -10,6 +10,61 @@ export type AgentRunStatus =
 
 export type AgentConnectionState = "idle" | "connecting" | "streaming" | "reconnecting" | "closed" | "error";
 
+export interface AgentSkill {
+  name: string;
+  description: string;
+}
+
+export type AgentLoopStep =
+  | "assistant_response"
+  | "tool_planning"
+  | "tool_request_repair"
+  | "required_tool_repair"
+  | "final_summary"
+  | "intent_capability_guard"
+  | "tool_execution";
+
+export type AgentEventType =
+  | "context.history_compacted"
+  | "model.started"
+  | "model.delta"
+  | "model.markdown_normalized"
+  | "model.stream_interrupted"
+  | "model.completed"
+  | "model.tool_request_detected"
+  | "model.tool_request_invalid"
+  | "model.tool_request_repaired"
+  | "model.tool_request_repair_failed"
+  | "model.tool_request_stream_suppressed"
+  | "model.required_tool_missing"
+  | "model.required_tool_repaired"
+  | "model.required_tool_repair_failed"
+  | "tool.planned"
+  | "tool.running"
+  | "tool.completed"
+  | "tool.result_observed"
+  | "run.queued"
+  | "run.started"
+  | "run.completed"
+  | "run.failed";
+
+export interface AgentEventPayload extends Record<string, unknown> {
+  iteration_id?: string | number;
+  model_call_id?: string;
+  modelCallId?: string;
+  loop_step?: AgentLoopStep | string;
+  loopStep?: AgentLoopStep | string;
+  tool_call_id?: string;
+  toolCallId?: string;
+  decision_reason?: string;
+  decisionReason?: string;
+  content?: string;
+  replace_content?: boolean;
+  replaceContent?: boolean;
+  error_code?: string;
+  errorCode?: string;
+}
+
 export type AgentToolCallStatus =
   | "planned"
   | "leased"
@@ -74,9 +129,15 @@ export interface AgentRunEvent {
   id?: string;
   sequence?: number;
   runId?: string;
-  event: string;
-  payload: Record<string, unknown>;
+  event: AgentEventType | (string & {});
+  payload: AgentEventPayload;
   createdAt?: string;
+}
+
+export interface AgentRunEventSnapshot {
+  events: AgentRunEvent[];
+  nextAfterSequence?: number;
+  terminal: boolean;
 }
 
 export interface AgentToolCall {
@@ -230,6 +291,22 @@ export interface AgentRunSnapshot {
   updatedAt?: string;
   startedAt?: string;
   completedAt?: string;
+}
+
+export interface AgentRunFinalSummary {
+  runId?: string;
+  status?: AgentRunStatus;
+  assistantMessage?: string;
+  assistantVisible?: boolean;
+  modelInvoked?: boolean;
+  counts?: Record<string, unknown>;
+  result?: unknown;
+  actions?: unknown[];
+}
+
+export interface AgentConversationTranscript {
+  conversationId: string;
+  runs: AgentRunSnapshot[];
 }
 
 export interface AgentDashboardCheck {

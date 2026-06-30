@@ -1,4 +1,4 @@
-import { parseAgentSseChunk, subscribeAgentRunEvents } from "./agentStream";
+import { getAgentRunEventSnapshot, isAgentHeartbeatSseChunk, parseAgentSseChunk, subscribeAgentRunEvents } from "./agentStream";
 
 function streamResponse(chunks: string[]) {
   const encoder = new TextEncoder();
@@ -24,6 +24,8 @@ describe("Agent SSE stream", () => {
   it("parses standard SSE chunks and ignores heartbeat", () => {
     expect(parseAgentSseChunk(": keepalive\n\n")).toBeUndefined();
     expect(parseAgentSseChunk("event: heartbeat\ndata: {}\n\n")).toBeUndefined();
+    expect(isAgentHeartbeatSseChunk(": keepalive\n\n")).toBe(true);
+    expect(isAgentHeartbeatSseChunk("event: heartbeat\ndata: {}\n\n")).toBe(true);
 
     const event = parseAgentSseChunk('id: 3\nevent: run.completed\ndata: {"status":"completed"}\n\n');
 
@@ -56,11 +58,45 @@ describe("Agent SSE stream", () => {
     ]));
     const events: string[] = [];
 
-    await subscribeAgentRunEvents("run-1", (event) => events.push(`${event.sequence}:${event.event}`), { lastEventId: 4 });
+    const result = await subscribeAgentRunEvents("run-1", (event) => events.push(`${event.sequence}:${event.event}`), { lastEventId: 4 });
 
     expect(events).toEqual(["5:model.delta", "6:run.completed"]);
+    expect(result).toEqual({ eventCount: 2, heartbeatCount: 0 });
     const [, init] = fetchMock.mock.calls[0];
     expect((init?.headers as Headers).get("Last-Event-ID")).toBe("4");
     expect((init?.headers as Headers).get("Accept")).toBe("text/event-stream");
   });
+
+  it("reports heartbeat-only streams and maps snapshot backfill", async () => {
+    localStorage.setItem("access_token", "token");
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(streamResponse([": keepalive\n\n", "event: heartbeat\ndata: {}\n\n"]))
+      .mockResolvedValueOnce(jsonResponse({
+        events: [{ event_seq: 7, event_type: "model.delta", payload_json: { content: "backfill" } }],
+        next_after_sequence: 7,
+        terminal: false,
+      }));
+
+    const events: string[] = [];
+    const streamResult = await subscribeAgentRunEvents("run-heartbeat", (event) => events.push(event.event), { lastEventId: 6 });
+    const snapshot = await getAgentRunEventSnapshot("run-heartbeat", 6);
+
+    expect(streamResult).toEqual({ eventCount: 0, heartbeatCount: 2 });
+    expect(events).toEqual([]);
+    expect(snapshot.events[0]).toEqual(expect.objectContaining({
+      sequence: 7,
+      event: "model.delta",
+      payload: { content: "backfill" },
+    }));
+    expect(snapshot.nextAfterSequence).toBe(7);
+    expect(String(fetchMock.mock.calls[1][0])).toContain("/agents/runs/run-heartbeat/events/snapshot?after_sequence=6");
+  });
 });
+
+function jsonResponse(data: unknown) {
+  return {
+    ok: true,
+    status: 200,
+    json: async () => ({ code: 0, message: "ok", data }),
+  } as Response;
+}

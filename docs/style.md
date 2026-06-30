@@ -110,17 +110,20 @@
 
 ### 6.3 TESTAI 工作台
 
-- TESTAI 使用 Codex 式三栏布局：左侧本地 history 和运行控制，中间 `testagnet` 对话区与 composer，右侧 Run/Tool/Approval/Memory/Runbook/Dashboard Inspector。
+- TESTAI 使用 Codex 式三栏布局：左侧本地 history 和运行控制，中间 `testagnet` 对话区与 composer，右侧 Run/Tool/Approval/Memory/Runbook/Dashboard Inspector 默认收起，并通过中央线程头部的图标按钮展开。
 - `/agents` 页面外层应用导航和顶栏遵循项目统一样式；Codex 式视觉只作用于 Agent 内部工作线程、history rail、工具调用活动行和 composer，不改写全局菜单形态。
+- `/agents` 工作台在桌面端必须收敛在当前浏览器视口内，不产生页面级纵向滚动；长对话、长 JSON 和左侧历史只在对应内部区域滚动。
 - 中央 transcript 只展示用户目标、Agent 回复、思考态、工具调用、审批、迁移、必要的低层事件兜底和结果；`run.*` 生命周期事件只作为状态判断和摘要数据源，不展示为对话卡片；不展示静态系统说明卡，也不展示 dashboard/readiness 权限失败这类全局状态文案。
+- 中央 transcript 必须保留当前本地会话内的多轮 turn；继续发送 prompt 时，新一轮用户目标、思考态和 Agent 回复追加到同一线程底部，不得清空或覆盖上一轮问答。
 - 中央空状态标题使用“我们应该做什么”；用户发送消息并创建 Run 后，该空状态区域必须消失，避免和用户目标或等待态并存。
-- 左右栏为辅助信息，不得挤压中间 transcript；宽屏保留右侧 Inspector，窄桌面可隐藏右侧详情并保留主线程。
-- 中间 transcript 必须以工作线程阅读体验为主：连续 `assistant.delta`、`assistant.message`、`model.delta` 和 `model.message` 合并为一段 Agent 回复并渲染 Markdown 段落、列表、粗体和行内代码，不允许把流式文本片段拆成多条对话卡或裸露 Markdown 标记。
-- 工具、命令、执行和输出结果必须按事件位置以轻量内联折叠块展示，折叠态至少露出工具名、状态和一行输出预览，展开态展示 redacted input/output；右侧 Inspector 只作为详情补充，不能替代中央线程中的调用痕迹。
+- 左右栏为辅助信息，不得挤压中间 transcript；右侧 Inspector 初始收起以优先保留主线程，宽屏可通过详情按钮展开，窄桌面可隐藏右侧详情并保留主线程。
+- 中间 transcript 必须以工作线程阅读体验为主：连续 `assistant.delta`、`assistant.message`、`model.delta` 和 `model.message` 合并为一段 Agent 回复并渲染 Markdown 段落、标题、无序列表、有序列表、表格、代码围栏、引用、分隔线、粗体和行内代码，不允许把流式文本片段拆成多条对话卡，也不能把 ` ``` `、`---`、`1.`、`| 表头 |` 这类块级 Markdown 标记裸露成普通文本。
+- 工具、命令、执行和输出结果必须按事件位置以轻量内联折叠块展示，折叠态至少露出业务化工具名、状态和关键参数摘要（例如“场景组合”“需求：创建企业场景”），展开态展示 redacted input/output；模型内部 `agent_tool_request` 代码块、包含 `tool_name` 的工具请求 JSON、`model.tool_request_detected` 和 `tool.planned/running/completed` 这类低层过程事件不得作为普通 Agent 回复或事件卡展示；右侧 Inspector 只作为详情补充，不能替代中央线程中的调用痕迹。
 - `run.queued`、`run.started`、`run.completed` 等 `run.*` 生命周期事件不进入中央 transcript；其他 `*.started`、`*.completed` 低层原始 payload 默认折叠为“原始输出”，用户需要排查时再展开查看 JSON，避免 start/completed 事件把主线程撑成日志面板。
 - Composer 的 Enter 键发送必须符合对话工具习惯，Shift+Enter 才换行；发送成功后输入框清空。等待模型或工具返回时，线程中展示带点状动效和耗时计数的“正在思考”轻量活动行，真实回复到达后自动移除。
 - ToolCall、Approval、Migration、ContextBuild 和 LoopObservation 在时间线中以紧凑折叠块呈现，完整 JSON、权限、CAS、Memory 证据和 runbook 诊断进入右侧详情或可展开区域。
 - 历史列表必须明确本地 MVP 与服务端历史的边界，不能用视觉文案暗示跨设备历史已经可用。
+- TESTAI 普通工作区不得把 `run_id`、`conversation_id`、`runtime_snapshot_id`、hash、sequence 等机器标识当作卡片摘要、侧栏字段或 Run Summary 展示；优先使用目标标题、状态、循环进度、工具名、风险原因和可执行动作。
 - 历史项的置顶、重命名、导出和删除使用图标按钮时必须提供 `aria-label`；快捷键入口不能替代可见按钮。
 
 所有布局必须允许长名称、长 JSON、错误信息和空数据存在。不得以固定示例内容作为唯一尺寸依据。

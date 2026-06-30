@@ -1,7 +1,7 @@
 # 前端开发计划
 
 状态：当前计划
-最后核验：2026-06-27
+最后核验：2026-06-30
 
 ## 1. 当前目标
 
@@ -25,7 +25,8 @@
 - HTTP 和 WebSocket 用例新增/编辑器统一使用“响应”术语，准确表达实际调试结果和已保存响应。
 - 建立全局分页组件并接入接口用例、项目、环境、测试计划、计划执行历史、场景和执行队列主列表；支持每页条数、筛选重置和删除后的页码回退。
 - 新增缺陷跟踪模块，支持摘要列表、独立详情路由、按项目记录 Bug、维护富文本与图片附件、筛选分页和状态流转；粘贴截图以内嵌媒体形式插入正文光标位置，详情正文支持双击灯箱预览和多图切换，独立选择的图片保留在附件区；编辑、删除集中在详情页，列表状态操作收纳到三点菜单。
-- 新增 Agent Runtime 前端工作台：`/agents` 路由、`src/types/agents.ts` 契约类型、`src/api/agents.ts` 普通 API 封装、`src/api/agentStream.ts` SSE fetch parser、本地 conversation/run history、创建 Agent Run、Codex 式三栏工作线程、右侧 Run/Tool/Approval/Memory/Runbook/Dashboard Inspector、ToolCall 详情 hydration、approval CAS 提交、Migration/Context/Loop/Memory 二级资源刷新、Runbook safe actions 到 `resume`、`reconcile`、`tool_call_detail` 的前端映射、SSE 断线自动重连、history 搜索/重命名/置顶/删除/导出、快捷键和 readiness checks 展示。中央线程已合并连续 assistant/model delta 为单条 Agent 回复，并按 `tool_call_id` 把工具调用、输入、输出和权限信息内联回对话流。当前后端未提供服务端 conversation/run list，跨设备历史仍是目标契约，本地 history 仅作为 MVP index。
+- 新增 Agent Runtime 前端工作台：`/agents` 路由、`src/types/agents.ts` 契约类型、`src/api/agents.ts` 普通 API 封装、`src/api/agentStream.ts` SSE fetch parser、本地 conversation/run history、创建 Agent Run、Codex 式三栏工作线程、右侧 Run/Tool/Approval/Memory/Runbook/Dashboard Inspector、ToolCall 详情 hydration、approval CAS 提交、Migration/Context/Loop/Memory 二级资源刷新、Runbook safe actions 到 `resume`、`reconcile`、`tool_call_detail` 的前端映射、SSE 断线自动重连、snapshot 补拉、terminal summary 校准、history 搜索/重命名/置顶/删除/导出、快捷键和 readiness checks 展示。中央线程已把用户可见 assistant 内容和 Agent loop 审计事件分离：`model.delta`/`model.markdown_normalized`/`model.completed`/`run.completed.result.message` 进入 GitHub Flavored Markdown 回复，工具请求修复、required tool 修复、history compacted 和 ToolCall 审计进入 timeline、ToolCall 或 Inspector。后端已提供服务端 conversation/run list、transcript 和 export 契约；当前页面仍以本地 history MVP 为主，打开已有 conversation 时用服务端 transcript 校准，服务端列表接入列为下一阶段计划。
+- Agent 数据层新增 `AgentSkill` 类型和 `getAgentSkills()`，用于读取后端 Codex-style Skill catalog 的 `{name,description}` 元数据；Skill 正文、Skill 私有资源、后端私有 `triggers`、`guard_unsupported_capability`、`routing_requires_tool`、`routing_required_tool_after_success`、`intent_markers`、guard/routing hints 和 ToolSpec 后端私有执行/修复字段不进入前端渲染，普通对话事实源仍是 Run、SSE、ToolCall 和 summary。后端已将 required follow-up 规则收窄到明确场景编排意图；只读项目上下文或“是否已有场景”问题可以没有 `scenario.compose_draft` ToolCall 而直接完成。
 
 ### 测试计划
 
@@ -109,14 +110,12 @@
 - 补充无障碍键盘操作和窄屏布局。
 - 为场景工作台增加可折叠侧栏、可调整栏宽和紧凑/详细步骤密度切换。
 
-### P1：Agent Runtime 联调
+### P1：Agent Runtime 收口
 
-- 随后端 Phase 1 联调 `/agents/runs`、`/agents/runs/{run_id}` 和 `/agents/runs/{run_id}/events`，确认 EventStore sequence、SSE replay、终态校准和 Run status 映射。
-- 随后端 Phase 2/3 联调 `GET /agents/tool-calls/{tool_call_id}`、ToolCall redacted input/output、required permissions、reconcile attempts、BackendEffectCapability 和 recovery decision。
-- 随后端 Phase 4 联调 approve/reject 的 CAS body、stale、superseded、epoch conflict 和 409 错误态。
-- 随后端 Phase 5 联调 ContextBuild、LoopObservation、Memory usage feedback 和高风险 Memory-only 提示。
-- 随后端 Phase 6 联调 migration resolve 后的 Freshness Gate、readiness dashboard、metrics、alerts、release gates、Runbook safe action 权限隐藏和后端结果语义。
-- 等后端新增服务端 conversation/run list 契约后，再把本地 history index 升级为跨设备历史，并替换当前本地导出的有限快照。
+- 已完成 `/agents/runs` 创建、Run 详情、SSE、snapshot 补拉、terminal summary 校准、conversation transcript、ToolCall、Approval CAS、Migration、ContextBuild、LoopObservation、Memory usage、Runbook、Dashboard、release gate promotion 和 `GET /agents/skills` 元数据边界的前端接入与核心测试覆盖。
+- 继续核验真实环境下 EventStore sequence、SSE replay、summary assistant_message、stale worker lost、ToolResultPolicy 最终回复预算、required follow-up 审计事件过滤和 Markdown 渲染在用户可见 UI 中保持一致。
+- 若后续增加 Agent 能力面板，只展示 `GET /agents/skills` 的 `{name,description}`，仍不依赖后端 `SKILL.md` 正文、Skill 私有资源、`triggers`、`guard_unsupported_capability`、`routing_requires_tool`、`routing_required_tool_after_success`、`intent_markers`、guard/routing hints 或 ToolSpec 后端私有执行/修复字段。
+- 接入后端已提供的 `GET /agents/conversations`、`GET /agents/conversations/{conversation_id}/runs` 和 export 契约，把本地 history index 升级为服务端历史视图；保留本地 index 作为离线/失败兜底。
 - 抽拆 `src/pages/AgentsPage.tsx` 为 `src/components/agent/` 组件族，降低后续联调和专项测试维护成本。
 
 ## 5. 开发完成标准

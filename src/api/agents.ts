@@ -1,6 +1,9 @@
 import { requestWithAuth } from "./client";
-export { subscribeAgentRunEvents } from "./agentStream";
+export { getAgentRunEventSnapshot, subscribeAgentRunEvents } from "./agentStream";
 export type {
+  AgentConversationTranscript,
+  AgentEventPayload,
+  AgentEventType,
   AgentAlert,
   AgentApproval,
   AgentApprovalDecisionPayload,
@@ -17,11 +20,14 @@ export type {
   AgentReleaseGate,
   AgentRunCreatePayload,
   AgentRunEvent,
+  AgentRunEventSnapshot,
+  AgentRunFinalSummary,
   AgentRunbook,
   AgentRunQueued,
   AgentRunSnapshot,
   AgentRunStatus,
   AgentRunSummary,
+  AgentSkill,
   AgentToolCall,
   AgentToolCallStatus,
 } from "../types/agents";
@@ -30,6 +36,7 @@ import type {
   AgentApproval,
   AgentApprovalDecisionPayload,
   AgentBackendEffectCapability,
+  AgentConversationTranscript,
   AgentContextBuild,
   AgentDashboardCheck,
   AgentDashboardSnapshot,
@@ -41,11 +48,13 @@ import type {
   AgentReleaseGate,
   AgentRunCreatePayload,
   AgentRunEvent,
+  AgentRunFinalSummary,
   AgentRunbook,
   AgentRunQueued,
   AgentRunSnapshot,
   AgentRunStatus,
   AgentRunSummary,
+  AgentSkill,
   AgentToolCall,
   AgentToolCallStatus,
 } from "../types/agents";
@@ -294,6 +303,59 @@ function mapSnapshot(value: unknown): AgentRunSnapshot {
   };
 }
 
+function mapRunFinalSummary(value: unknown): AgentRunFinalSummary {
+  const source = asRecord(value);
+  return {
+    runId: optionalString(source.run_id ?? source.runId),
+    status: optionalString(source.status) as AgentRunStatus | undefined,
+    assistantMessage: optionalString(source.assistant_message ?? source.assistantMessage ?? asRecord(source.result).message),
+    assistantVisible: source.assistant_visible === undefined && source.assistantVisible === undefined
+      ? undefined
+      : Boolean(source.assistant_visible ?? source.assistantVisible),
+    modelInvoked: source.model_invoked === undefined && source.modelInvoked === undefined
+      ? undefined
+      : Boolean(source.model_invoked ?? source.modelInvoked),
+    counts: asRecord(source.counts ?? source.event_counts ?? source.eventCounts),
+    result: source.result,
+    actions: asArray(source.actions),
+  };
+}
+
+function mapAgentSkill(value: unknown): AgentSkill {
+  const source = asRecord(value);
+  return {
+    name: String(source.name ?? ""),
+    description: String(source.description ?? ""),
+  };
+}
+
+function mapConversationTranscript(value: unknown): AgentConversationTranscript {
+  const source = asRecord(value);
+  const conversation = asRecord(source.conversation);
+  return {
+    conversationId: String(source.conversation_id ?? source.conversationId ?? conversation.conversation_id ?? conversation.conversationId ?? ""),
+    runs: asArray(source.runs ?? source.turns ?? source.items).map((item) => {
+      const record = asRecord(item);
+      const snapshot = mapSnapshot(record.run ?? record.snapshot ?? item);
+      const assistantMessage = optionalString(record.assistant_message ?? record.assistantMessage);
+      if (!snapshot.events.length && assistantMessage) {
+        return {
+          ...snapshot,
+          events: [{
+            id: `transcript-summary-${snapshot.runId}`,
+            sequence: optionalNumber(record.latest_event_sequence ?? record.latestEventSequence),
+            runId: snapshot.runId,
+            event: "model.completed",
+            payload: { content: assistantMessage },
+            createdAt: optionalString(record.updated_at ?? record.updatedAt ?? snapshot.updatedAt),
+          }],
+        };
+      }
+      return snapshot;
+    }),
+  };
+}
+
 function mapDashboard(value: unknown): AgentDashboardSnapshot {
   const source = asRecord(value);
   const checks = asArray(source.checks).map((item) => {
@@ -382,6 +444,23 @@ export async function listAgentRuns(projectId?: number) {
 export async function getAgentRun(runId: string) {
   const result = await requestWithAuth<BackendRecord>(`/agents/runs/${runId}`);
   return mapSnapshot(result);
+}
+
+export async function getAgentRunSummary(runId: string) {
+  const result = await requestWithAuth<BackendRecord>(`/agents/runs/${runId}/summary`);
+  return mapRunFinalSummary(result);
+}
+
+export async function getAgentConversationTranscript(projectId: number, conversationId: string) {
+  const result = await requestWithAuth<BackendRecord>(
+    `/agents/conversations/${encodeURIComponent(conversationId)}/transcript${queryString({ project_id: projectId })}`,
+  );
+  return mapConversationTranscript(result);
+}
+
+export async function getAgentSkills() {
+  const result = await requestWithAuth<unknown>("/agents/skills");
+  return asArray(asRecord(result).items ?? result).map(mapAgentSkill);
 }
 
 export async function cancelAgentRun(runId: string) {

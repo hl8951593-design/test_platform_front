@@ -1,0 +1,142 @@
+[58042866ms] [ERROR] The final argument passed to %s changed size between renders. The order and size of this array must remain constant.
+
+Previous: %s
+Incoming: %s useEffect [, (event) => {
+    const eventRunId = event.runId || activeRunId;
+    if (eventRunId && event.sequence !== void 0) {
+      const currentSequence = lastEventIdByRunRef.current.get(eventRunId);
+      lastEventIdByRunRef.current.set(eventRunId, currentSequence === void 0 ? event.sequence : Math.max(currentSequence, event.sequence));
+    }
+    const identity = eventIdentity(event);
+    if (identity && eventKeysRef.current.has(identity)) return;
+    if (identity) eventKeysRef.current.add(identity);
+    pendingEventsRef.current.push(event);
+    if (eventFlushFrameRef.current !== null) return;
+    eventFlushFrameRef.current = window.requestAnimationFrame(() => {
+      eventFlushFrameRef.current = null;
+      const nextEvents = pendingEventsRef.current;
+      pendingEventsRef.current = [];
+      setEvents((current) => appendCompactedEvents(current, nextEvents));
+    });
+  }, , (nextState) => {
+    if (streamStateRef.current === nextState) return;
+    streamStateRef.current = nextState;
+    setStreamState(nextState);
+  }] [, (event) => {
+    const eventRunId = event.runId || activeRunId;
+    if (eventRunId && event.sequence !== void 0) {
+      const currentSequence = lastEventIdByRunRef.current.get(eventRunId);
+      lastEventIdByRunRef.current.set(eventRunId, currentSequence === void 0 ? event.sequence : Math.max(currentSequence, event.sequence));
+    }
+    const identity = eventIdentity(event);
+    if (identity && eventKeysRef.current.has(identity)) return;
+    if (identity) eventKeysRef.current.add(identity);
+    pendingEventsRef.current.push(event);
+    if (eventFlushFrameRef.current !== null) return;
+    eventFlushFrameRef.current = window.requestAnimationFrame(() => {
+      eventFlushFrameRef.current = null;
+      const nextEvents = pendingEventsRef.current;
+      pendingEventsRef.current = [];
+      setEvents((current) => appendCompactedEvents(current, nextEvents));
+    });
+  }, async (runId) => {
+    try {
+      const summary = await getAgentRunSummary(runId);
+      if (summary.assistantVisible !== false) appendFinalAssistantMessage(runId, summary.assistantMessage);
+      if (summary.status) {
+        setRun((current) => current && current.runId === runId ? { ...current, status: summary.status ?? current.status, result: summary.result ?? current.result } : current);
+      }
+    } catch {
+      const snapshot = await getAgentRun(runId);
+      setRun((current) => {
+        const effectiveConversationId = current?.runId === snapshot.runId ? current.conversationId : snapshot.conversationId;
+        return current?.runId === runId ? { ...snapshot, conversationId: effectiveConversationId } : current;
+      });
+      appendFinalAssistantMessage(runId, String(asRecord(snapshot.result)?.message ?? ""));
+    }
+  }, , (nextState) => {
+    if (streamStateRef.current === nextState) return;
+    streamStateRef.current = nextState;
+    setStreamState(nextState);
+  }] @ http://localhost:5174/node_modules/.vite/deps/react-dom_client.js?v=8f8fad76:5627
+[58053927ms] [ERROR] The final argument passed to %s changed size between renders. The order and size of this array must remain constant.
+
+Previous: %s
+Incoming: %s useEffect [, , async (runId, eventName) => {
+    const tasks = [];
+    if (!eventName || eventName.startsWith("approval.")) {
+      tasks.push(getAgentApprovals(runId).then((approvals) => mergeRunData({ approvals })).catch(() => void 0));
+    }
+    if (!eventName || eventName.startsWith("migration.")) {
+      tasks.push(getAgentMigrationBlocks(runId).then((migrationBlocks) => mergeRunData({ migrationBlocks })).catch(() => void 0));
+    }
+    if (!eventName || eventName.startsWith("context.")) {
+      tasks.push(getAgentContextBuilds(runId).then((contextBuilds) => mergeRunData({ contextBuilds })).catch(() => void 0));
+    }
+    if (!eventName || eventName.startsWith("loop.")) {
+      tasks.push(getAgentLoopObservations(runId).then((loopObservations) => mergeRunData({ loopObservations })).catch(() => void 0));
+    }
+    if (!eventName || eventName.startsWith("memory.")) {
+      tasks.push(getAgentMemoryUsageEvents(runId).then(setMemoryUsage).catch(() => void 0));
+    }
+    await Promise.all(tasks);
+  }, (summary) => {
+    setRunHistory((current) => {
+      const summaryKey = historyConversationKey(summary);
+      const previous = current.find((item) => historyConversationKey(item) === summaryKey);
+      const next = normalizeRunHistory(
+        [
+          { ...previous, ...summary, title: previous?.title ?? summary.title, pinned: previous?.pinned ?? summary.pinned },
+          ...current.filter((item) => historyConversationKey(item) !== summaryKey)
+        ]
+      );
+      localStorage.setItem(historyStorageKey, JSON.stringify(next));
+      return next;
+    });
+  }, , ] [, async (runId) => {
+    try {
+      const summary = await getAgentRunSummary(runId);
+      if (summary.assistantVisible !== false) appendFinalAssistantMessage(runId, summary.assistantMessage);
+      if (summary.status) {
+        setRun((current) => current && current.runId === runId ? { ...current, status: summary.status ?? current.status, result: summary.result ?? current.result } : current);
+      }
+    } catch {
+      const snapshot = await getAgentRun(runId);
+      setRun((current) => {
+        const effectiveConversationId = current?.runId === snapshot.runId ? current.conversationId : snapshot.conversationId;
+        return current?.runId === runId ? { ...snapshot, conversationId: effectiveConversationId } : current;
+      });
+      appendFinalAssistantMessage(runId, String(asRecord(snapshot.result)?.message ?? ""));
+    }
+  }, , async (runId, eventName) => {
+    const tasks = [];
+    if (!eventName || eventName.startsWith("approval.")) {
+      tasks.push(getAgentApprovals(runId).then((approvals) => mergeRunData({ approvals })).catch(() => void 0));
+    }
+    if (!eventName || eventName.startsWith("migration.")) {
+      tasks.push(getAgentMigrationBlocks(runId).then((migrationBlocks) => mergeRunData({ migrationBlocks })).catch(() => void 0));
+    }
+    if (!eventName || eventName.startsWith("context.")) {
+      tasks.push(getAgentContextBuilds(runId).then((contextBuilds) => mergeRunData({ contextBuilds })).catch(() => void 0));
+    }
+    if (!eventName || eventName.startsWith("loop.")) {
+      tasks.push(getAgentLoopObservations(runId).then((loopObservations) => mergeRunData({ loopObservations })).catch(() => void 0));
+    }
+    if (!eventName || eventName.startsWith("memory.")) {
+      tasks.push(getAgentMemoryUsageEvents(runId).then(setMemoryUsage).catch(() => void 0));
+    }
+    await Promise.all(tasks);
+  }, (summary) => {
+    setRunHistory((current) => {
+      const summaryKey = historyConversationKey(summary);
+      const previous = current.find((item) => historyConversationKey(item) === summaryKey);
+      const next = normalizeRunHistory(
+        [
+          { ...previous, ...summary, title: previous?.title ?? summary.title, pinned: previous?.pinned ?? summary.pinned },
+          ...current.filter((item) => historyConversationKey(item) !== summaryKey)
+        ]
+      );
+      localStorage.setItem(historyStorageKey, JSON.stringify(next));
+      return next;
+    });
+  }, , ] @ http://localhost:5174/node_modules/.vite/deps/react-dom_client.js?v=8f8fad76:5627

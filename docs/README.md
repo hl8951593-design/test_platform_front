@@ -13,6 +13,15 @@
 | [style.md](style.md) | 前端整体 UI 风格、视觉语义、组件状态和可访问性规范 |
 | [frontend-performance.md](frontend-performance.md) | 性能、请求竞态和前端维护约定 |
 
+## 当前权威与历史入口
+
+| 类型 | 当前处理 |
+| --- | --- |
+| 前端当前实现 | 以本目录下 `technical-architecture.md`、`frontend-feature-logic.md`、模块架构文档和 `frontend-development-plan.md` 为准 |
+| Agent 工作台 | 以 [agent-runtime-frontend-architecture.md](agent-runtime-frontend-architecture.md) 和 [frontend-development-plan.md](frontend-development-plan.md) 为准；早期 Agent 原型/专项计划已合并为历史入口 |
+| 后端 API 契约 | `../api_docs/` 是前端联调查阅镜像，权威源仍是后端仓库 `docs/api_*.md` 与 `docs/api_agent_frontend_contract.md` |
+| 新增文档 | 不再新增“临时计划 + 当前实现”双份文档；完成后把计划并入主开发计划，模块行为并入模块架构或功能逻辑 |
+
 ## 业务模块
 
 | 文档 | 说明 |
@@ -37,7 +46,7 @@
 
 | 文档 | 说明 |
 | --- | --- |
-| [../api_docs/README.md](../api_docs/README.md) | 后端接口契约、架构参考和历史开发记录的权威边界 |
+| [../api_docs/README.md](../api_docs/README.md) | 前端仓库内的后端 API 契约镜像边界 |
 | [../api_docs/api_scenarios.md](../api_docs/api_scenarios.md) | 场景、数据集、异步执行和运行详情接口 |
 | [../api_docs/api_test_plans.md](../api_docs/api_test_plans.md) | 测试计划、调度和运行历史接口 |
 | [../api_docs/api_visual_flows.md](../api_docs/api_visual_flows.md) | 可视化编排后端接口 |
@@ -45,4 +54,4 @@
 | [../api_docs/api_media.md](../api_docs/api_media.md) | 缺陷图片上传、临时地址刷新和删除接口 |
 | [../api_docs/visual_flow_schema.json](../api_docs/visual_flow_schema.json) | FlowDefinition JSON Schema |
 
-功能变更应优先同步模块技术文档和 `frontend-feature-logic.md`；架构、权限或数据归属变化还需同步 `technical-architecture.md`；未完成工作更新到 `frontend-development-plan.md`。提交前运行 `npm run docs:check`。
+功能变更应优先同步模块技术文档和 `frontend-feature-logic.md`；架构、权限或数据归属变化还需同步 `technical-architecture.md`；未完成工作更新到 `frontend-development-plan.md`。如果改动只影响前端布局、组件或交互，不要新增 `api_docs/` 文档；如果改动影响后端路径、字段或状态机，先更新后端权威契约，再同步前端镜像。提交前运行 `npm run docs:check`。

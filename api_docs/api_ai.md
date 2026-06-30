@@ -176,7 +176,11 @@ Harness+Loop Agent Runtime 按生产级 Agent Run 建模。当前前端已经按
 | 接口 | 方法 | 说明 |
 | --- | --- | --- |
 | `/agents/runs/{run_id}` | `GET` | 查询 Run、事件、ToolCall、Approval 和 Migration Block 快照 |
-| `/agents/runs?project_id={project_id}` | `GET` | 目标契约：查询当前项目下历史 Agent Run；当前 `/agents` 前端仍使用本地 history index，不依赖该接口 |
+| `/agents/runs?project_id={project_id}` | `GET` | 查询当前项目下历史 Agent Run；当前 `/agents` 页面仍主要使用本地 history index |
+| `/agents/conversations?project_id={project_id}` | `GET` | 查询当前项目下服务端 conversation 列表；前端待接入为跨设备历史事实源 |
+| `/agents/conversations/{conversation_id}/runs?project_id={project_id}` | `GET` | 查询指定 conversation 下的 run 列表 |
+| `/agents/conversations/{conversation_id}/transcript?project_id={project_id}` | `GET` | 读取服务端多轮 transcript；当前前端已用于打开历史时校准 |
+| `/agents/conversations/{conversation_id}/export?project_id={project_id}` | `GET` | 导出服务端 conversation 调试包；当前前端本地导出仍是有限快照 |
 | `/agents/runs/{run_id}/events` | `GET` | 订阅 EventStore SSE 事件，支持 `Last-Event-ID` |
 | `/agents/runs/{run_id}/cancel` | `POST` | 取消 Run |
 | `/agents/runs/{run_id}/resume` | `POST` | 恢复 Run |

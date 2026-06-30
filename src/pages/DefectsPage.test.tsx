@@ -148,11 +148,14 @@ describe("DefectsPage", () => {
 
     render(<DefectsPage onAction={vi.fn()} projectId={1} />);
     fireEvent.click(await screen.findByText("多图预览"));
-    const firstImage = await screen.findByAltText("first.png");
-    fireEvent.click(firstImage);
-    fireEvent.click(firstImage, { detail: 2 });
+    await waitFor(() => {
+      const firstImage = screen.getByAltText("first.png");
+      fireEvent.click(firstImage);
+      fireEvent.click(firstImage, { detail: 2 });
+      expect(screen.getByRole("dialog", { name: "图片预览" })).toBeInTheDocument();
+    });
 
-    const preview = await screen.findByRole("dialog", { name: "图片预览" });
+    const preview = screen.getByRole("dialog", { name: "图片预览" });
     expect(within(preview).getByText("1 / 2")).toBeInTheDocument();
     expect(within(preview).getByAltText("first.png")).toHaveAttribute("src", "https://minio.example/first");
     fireEvent.click(within(preview).getByRole("button", { name: "下一张图片" }));

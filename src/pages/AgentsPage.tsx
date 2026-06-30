@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   approveAgentToolCall,
   cancelAgentRun,
@@ -13,7 +13,10 @@ import {
   getAgentMigrationBlocks,
   getAgentReleaseGatePromotion,
   getAgentReleaseGates,
+  getAgentConversationTranscript,
   getAgentRun,
+  getAgentRunEventSnapshot,
+  getAgentRunSummary,
   getAgentRunbook,
   getAgentToolCall,
   reconcileAgentRun,
@@ -49,7 +52,12 @@ type InspectorTab = "run" | "tool" | "approval" | "memory" | "runbook" | "dashbo
 type AgentRunbookSafeAction = NonNullable<AgentRunbook["safeActions"]>[number];
 type MarkdownBlock =
   | { type: "paragraph"; content: string }
-  | { type: "list"; items: string[] };
+  | { type: "heading"; level: number; content: string }
+  | { type: "list"; ordered: boolean; items: string[] }
+  | { type: "code"; content: string }
+  | { type: "table"; headers: string[]; rows: string[][] }
+  | { type: "quote"; content: string }
+  | { type: "thematicBreak" };
 type AgentTranscriptItem =
   | { type: "assistant"; key: string; content: string; meta: string }
   | { type: "event"; key: string; event: AgentRunEvent }
@@ -97,6 +105,27 @@ function statusLabel(status?: string) {
   return status ? statusLabels[status] ?? status : "未知";
 }
 
+const agentEventTitleMap: Record<string, string> = {
+  "context.history_compacted": "上下文历史已压缩",
+  "model.started": "模型调用开始",
+  "model.stream_interrupted": "模型流式输出中断",
+  "tool.send_intent_recorded": "工具发送意图已记录",
+  "tool.transport_sent_observed": "已观察到工具传输发送",
+  "tool.backend_accepted": "后端已接受工具请求",
+  "tool.effect_committed": "工具效果已提交",
+  "tool.result_observed": "工具结果已进入上下文",
+};
+
+function eventDisplayTitle(eventType: string) {
+  if (agentEventTitleMap[eventType]) return agentEventTitleMap[eventType];
+  if (eventType.startsWith("model.")) return `模型事件：${eventType.slice("model.".length).replace(/_/g, " ")}`;
+  if (eventType.startsWith("tool.")) return `工具事件：${eventType.slice("tool.".length).replace(/_/g, " ")}`;
+  if (eventType.startsWith("context.")) return `上下文事件：${eventType.slice("context.".length).replace(/_/g, " ")}`;
+  if (eventType.startsWith("approval.")) return `审批事件：${eventType.slice("approval.".length).replace(/_/g, " ")}`;
+  if (eventType.startsWith("migration.")) return `迁移事件：${eventType.slice("migration.".length).replace(/_/g, " ")}`;
+  return eventType;
+}
+
 function statusTone(status?: string) {
   if (!status) return "neutral";
   if (["completed", "succeeded", "approved", "resolved", "pass"].includes(status)) return "success";
@@ -112,10 +141,28 @@ function stringifyValue(value: unknown) {
   return JSON.stringify(value, null, 2);
 }
 
+function parseMarkdownTableRow(line: string) {
+  const trimmed = line.trim();
+  if (!trimmed.startsWith("|") || !trimmed.endsWith("|")) return null;
+  return trimmed
+    .slice(1, -1)
+    .split("|")
+    .map((cell) => cell.trim());
+}
+
+function isMarkdownTableSeparator(line: string) {
+  const cells = parseMarkdownTableRow(line);
+  return Boolean(cells?.length && cells.every((cell) => /^:?-{3,}:?$/.test(cell)));
+}
+
 function parseMarkdownBlocks(markdown: string): MarkdownBlock[] {
   const blocks: MarkdownBlock[] = [];
   let paragraph: string[] = [];
-  let listItems: string[] = [];
+  let list: { ordered: boolean; items: string[] } | null = null;
+  let codeLines: string[] | null = null;
+  let quoteLines: string[] = [];
+  let pendingTableHeader: string[] | null = null;
+  let tableRows: string[][] | null = null;
 
   const flushParagraph = () => {
     if (!paragraph.length) return;
@@ -123,30 +170,144 @@ function parseMarkdownBlocks(markdown: string): MarkdownBlock[] {
     paragraph = [];
   };
   const flushList = () => {
-    if (!listItems.length) return;
-    blocks.push({ type: "list", items: listItems });
-    listItems = [];
+    if (!list?.items.length) return;
+    blocks.push({ type: "list", ordered: list.ordered, items: list.items });
+    list = null;
+  };
+  const flushQuote = () => {
+    if (!quoteLines.length) return;
+    blocks.push({ type: "quote", content: quoteLines.join(" ") });
+    quoteLines = [];
+  };
+  const flushTable = () => {
+    if (pendingTableHeader && tableRows?.length) {
+      blocks.push({ type: "table", headers: pendingTableHeader, rows: tableRows });
+    } else if (pendingTableHeader) {
+      blocks.push({ type: "paragraph", content: `| ${pendingTableHeader.join(" | ")} |` });
+    }
+    pendingTableHeader = null;
+    tableRows = null;
+  };
+  const flushCode = () => {
+    if (codeLines === null) return;
+    blocks.push({ type: "code", content: codeLines.join("\n").trimEnd() });
+    codeLines = null;
+  };
+  const flushFlow = () => {
+    flushParagraph();
+    flushList();
+    flushQuote();
+    flushTable();
   };
 
-  markdown.replace(/\r\n/g, "\n").split("\n").forEach((line) => {
-    const listMatch = line.match(/^\s*[-*]\s+(.+)$/);
+  const lines = markdown.replace(/\r\n/g, "\n").split("\n");
+  lines.forEach((line, index) => {
+    const trimmed = line.trim();
+    if (codeLines) {
+      if (trimmed.startsWith("```")) {
+        flushCode();
+      } else {
+        codeLines.push(line);
+      }
+      return;
+    }
+
+    if (tableRows) {
+      if (isMarkdownTableSeparator(line)) return;
+      const row = parseMarkdownTableRow(line);
+      if (row) {
+        tableRows.push(row);
+        return;
+      }
+      flushTable();
+    }
+
     if (!line.trim()) {
+      flushFlow();
+      return;
+    }
+
+    const tableRow = parseMarkdownTableRow(line);
+    if (tableRow) {
+      const nextLine = lines[index + 1] ?? "";
+      if (isMarkdownTableSeparator(nextLine)) {
+        flushFlow();
+        pendingTableHeader = tableRow;
+        tableRows = [];
+        return;
+      }
+      if (pendingTableHeader) {
+        tableRows = tableRows ?? [];
+        tableRows.push(tableRow);
+        return;
+      }
+    }
+
+    if (pendingTableHeader && isMarkdownTableSeparator(line)) {
+      tableRows = tableRows ?? [];
+      return;
+    }
+
+    if (trimmed.startsWith("```")) {
+      flushFlow();
+      codeLines = [];
+      return;
+    }
+
+    if (/^-{3,}$/.test(trimmed)) {
+      flushFlow();
+      blocks.push({ type: "thematicBreak" });
+      return;
+    }
+
+    const headingMatch = line.match(/^(#{1,6})\s+(.+)$/);
+    if (headingMatch) {
+      flushFlow();
+      blocks.push({ type: "heading", level: headingMatch[1].length, content: headingMatch[2].trim() });
+      return;
+    }
+
+    const quoteMatch = line.match(/^>\s?(.+)$/);
+    if (quoteMatch) {
       flushParagraph();
       flushList();
+      quoteLines.push(quoteMatch[1]);
       return;
     }
+
+    const unorderedMatch = line.match(/^\s*[-*]\s+(.+)$/);
+    const orderedMatch = line.match(/^\s*\d+[.)]\s+(.+)$/);
+    const listMatch = unorderedMatch ?? orderedMatch;
     if (listMatch) {
+      const ordered = Boolean(orderedMatch);
       flushParagraph();
-      listItems.push(listMatch[1]);
+      flushQuote();
+      if (list && list.ordered !== ordered) flushList();
+      if (!list) list = { ordered, items: [] };
+      list.items.push(listMatch[1]);
       return;
     }
+
     flushList();
+    flushQuote();
     paragraph.push(line.trim());
   });
 
   flushParagraph();
   flushList();
+  flushQuote();
+  flushTable();
+  flushCode();
   return blocks;
+}
+
+function stripInternalToolRequestBlocks(content: string) {
+  return content
+    .replace(/(^|\n)[^\n]*(?:调用|使用)[^\n]*(?:工具|Tool)[^\n]*[:：]\s*```[^\n`]*[\s\S]*?"tool_name"\s*:\s*"[^"]+"[\s\S]*?```/g, "$1")
+    .replace(/(^|\n)[^\n]*(?:调用|使用)[^\n]*(?:工具|Tool)[^\n]*[:：]\s*\n```[^\n`]*[\s\S]*?"tool_name"\s*:\s*"[^"]+"[\s\S]*?```/g, "$1")
+    .replace(/```[^\n`]*[\s\S]*?"tool_name"\s*:\s*"[^"]+"[\s\S]*?```/g, "")
+    .replace(/(^|\n)\s*\{[^\n]*"tool_name"\s*:\s*"[^"]+"[^\n]*\}\s*(?=\n|$)/g, "$1")
+    .trim();
 }
 
 function renderInlineMarkdown(text: string, keyPrefix: string) {
@@ -179,13 +340,60 @@ function MarkdownContent({ content }: { content: string }) {
     <div className="agent-markdown">
       {blocks.map((block, blockIndex) => {
         if (block.type === "list") {
+          const ListTag = block.ordered ? "ol" : "ul";
           return (
-            <ul key={`list-${blockIndex}`}>
+            <ListTag key={`list-${blockIndex}`}>
               {block.items.map((item, itemIndex) => (
                 <li key={`${blockIndex}-${itemIndex}`}>{renderInlineMarkdown(item, `${blockIndex}-${itemIndex}`)}</li>
               ))}
-            </ul>
+            </ListTag>
           );
+        }
+        if (block.type === "heading") {
+          return block.level <= 2 ? (
+            <h3 key={`heading-${blockIndex}`}>{renderInlineMarkdown(block.content, `h-${blockIndex}`)}</h3>
+          ) : (
+            <h4 key={`heading-${blockIndex}`}>{renderInlineMarkdown(block.content, `h-${blockIndex}`)}</h4>
+          );
+        }
+        if (block.type === "code") {
+          return (
+            <pre key={`code-${blockIndex}`}>
+              <code>{block.content}</code>
+            </pre>
+          );
+        }
+        if (block.type === "table") {
+          return (
+            <div className="agent-markdown-table-wrap" key={`table-${blockIndex}`}>
+              <table>
+                <thead>
+                  <tr>
+                    {block.headers.map((header, headerIndex) => (
+                      <th key={`${blockIndex}-h-${headerIndex}`}>{renderInlineMarkdown(header, `${blockIndex}-h-${headerIndex}`)}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {block.rows.map((row, rowIndex) => (
+                    <tr key={`${blockIndex}-r-${rowIndex}`}>
+                      {block.headers.map((_, cellIndex) => (
+                        <td key={`${blockIndex}-r-${rowIndex}-${cellIndex}`}>
+                          {renderInlineMarkdown(row[cellIndex] ?? "", `${blockIndex}-r-${rowIndex}-${cellIndex}`)}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          );
+        }
+        if (block.type === "quote") {
+          return <blockquote key={`quote-${blockIndex}`}>{renderInlineMarkdown(block.content, `q-${blockIndex}`)}</blockquote>;
+        }
+        if (block.type === "thematicBreak") {
+          return <hr key={`hr-${blockIndex}`} />;
         }
         return <p key={`paragraph-${blockIndex}`}>{renderInlineMarkdown(block.content, `p-${blockIndex}`)}</p>;
       })}
@@ -208,7 +416,35 @@ function eventText(event: AgentRunEvent) {
 }
 
 function isAssistantDelta(event: AgentRunEvent) {
-  return ["assistant.delta", "assistant.message", "model.delta", "model.message"].includes(event.event);
+  return event.event === "model.delta";
+}
+
+function isAssistantFinalContent(event: AgentRunEvent) {
+  return ["model.markdown_normalized", "model.completed"].includes(event.event) && eventText(event).length > 0;
+}
+
+function isAssistantRunCompletedContent(event: AgentRunEvent) {
+  if (event.event !== "run.completed") return false;
+  const result = asRecord(event.payload.result);
+  return typeof result?.message === "string" && result.message.trim().length > 0;
+}
+
+function isReplaceContentEvent(event: AgentRunEvent) {
+  return event.payload.replace_content === true || event.payload.replaceContent === true || event.event === "model.completed";
+}
+
+function normalizeAssistantContent(content: string) {
+  return content
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .join("\n")
+    .trim();
+}
+
+function isSameAssistantContent(previous: string, next: string) {
+  if (!previous || !next) return false;
+  return normalizeAssistantContent(previous) === normalizeAssistantContent(next);
 }
 
 function mergeAssistantEvent(previous: AgentRunEvent, next: AgentRunEvent): AgentRunEvent {
@@ -242,9 +478,25 @@ function isRunLifecycleEvent(event: AgentRunEvent) {
   return event.event.startsWith("run.");
 }
 
+function isSuppressedRuntimeEvent(event: AgentRunEvent) {
+  return event.event === "model.tool_request_detected"
+    || event.event.startsWith("model.tool_request_")
+    || event.event.startsWith("model.required_tool_")
+    || ["tool.planned", "tool.running", "tool.completed"].includes(event.event);
+}
+
 function eventToolCallId(event: AgentRunEvent) {
   const id = event.payload.tool_call_id ?? event.payload.toolCallId ?? event.payload.id;
   return typeof id === "string" ? id : undefined;
+}
+
+function eventErrorCode(event: AgentRunEvent) {
+  const code = event.payload.error_code ?? event.payload.errorCode;
+  return typeof code === "string" ? code : undefined;
+}
+
+function isStaleWorkerLostEvent(event: AgentRunEvent) {
+  return event.event === "run.failed" && eventErrorCode(event) === "agent_run_stale_worker_lost";
 }
 
 function buildAgentTranscriptItems(events: AgentRunEvent[], toolCalls: AgentToolCall[]) {
@@ -254,22 +506,45 @@ function buildAgentTranscriptItems(events: AgentRunEvent[], toolCalls: AgentTool
   let assistantBuffer = "";
   let assistantStartKey = "";
   let assistantMeta = "";
+  let lastAssistantContent = "";
 
   const flushAssistant = () => {
     if (!assistantBuffer) return;
+    const content = stripInternalToolRequestBlocks(assistantBuffer);
+    if (!content) {
+      assistantBuffer = "";
+      assistantStartKey = "";
+      assistantMeta = "";
+      return;
+    }
     items.push({
       type: "assistant",
       key: assistantStartKey || `assistant-${items.length}`,
-      content: assistantBuffer,
+      content,
       meta: assistantMeta || "assistant",
     });
+    lastAssistantContent = content;
     assistantBuffer = "";
     assistantStartKey = "";
     assistantMeta = "";
   };
 
   events.forEach((event, index) => {
+    if (isAssistantRunCompletedContent(event)) {
+      const content = String(asRecord(event.payload.result)?.message ?? "");
+      if (assistantBuffer) {
+        assistantBuffer = content;
+        return;
+      }
+      flushAssistant();
+      if (isSameAssistantContent(lastAssistantContent, content)) return;
+      assistantStartKey = eventKey(event, index);
+      assistantMeta = event.sequence ? `#${event.sequence} · Agent 回复` : "Agent 回复";
+      assistantBuffer = content;
+      return;
+    }
     if (isRunLifecycleEvent(event)) return;
+    if (isSuppressedRuntimeEvent(event)) return;
 
     if (isAssistantDelta(event)) {
       if (!assistantBuffer) {
@@ -277,6 +552,24 @@ function buildAgentTranscriptItems(events: AgentRunEvent[], toolCalls: AgentTool
         assistantMeta = event.sequence ? `#${event.sequence} 起 · Agent 回复` : "Agent 回复";
       }
       assistantBuffer += eventText(event);
+      return;
+    }
+
+    if (isAssistantFinalContent(event)) {
+      const content = eventText(event);
+      if (assistantBuffer && isReplaceContentEvent(event)) {
+        assistantBuffer = content;
+        return;
+      }
+      if (assistantBuffer && isSameAssistantContent(assistantBuffer, content)) {
+        assistantBuffer = content;
+        return;
+      }
+      flushAssistant();
+      if (isSameAssistantContent(lastAssistantContent, content)) return;
+      assistantStartKey = eventKey(event, index);
+      assistantMeta = event.sequence ? `#${event.sequence} · Agent 回复` : "Agent 回复";
+      assistantBuffer = content;
       return;
     }
 
@@ -303,6 +596,70 @@ function buildAgentTranscriptItems(events: AgentRunEvent[], toolCalls: AgentTool
   return items;
 }
 
+function effectiveHistoryStatus(summary: AgentRunSummary, activeRun: AgentRunSnapshot | null) {
+  return activeRun?.runId === summary.runId ? activeRun.status : summary.status;
+}
+
+function historyConversationKey(summary: Pick<AgentRunSummary, "conversationId" | "runId">) {
+  return summary.conversationId || summary.runId;
+}
+
+function normalizeRunHistory(entries: AgentRunSummary[]) {
+  const normalized: AgentRunSummary[] = [];
+  entries.forEach((entry) => {
+    const entryKey = historyConversationKey(entry);
+    const existingIndex = normalized.findIndex((item) => historyConversationKey(item) === entryKey);
+    if (existingIndex === -1) {
+      normalized.push(entry);
+      return;
+    }
+    const existing = normalized[existingIndex];
+    normalized[existingIndex] = {
+      ...entry,
+      ...existing,
+      title: existing.title ?? entry.title,
+      pinned: existing.pinned ?? entry.pinned,
+      unavailable: existing.unavailable ?? entry.unavailable,
+    };
+  });
+  return normalized.slice(0, AGENT_HISTORY_LIMIT);
+}
+
+function upsertConversationTurn(turns: AgentRunSnapshot[], snapshot: AgentRunSnapshot) {
+  if (!snapshot.runId) return turns;
+  const existingIndex = turns.findIndex((turn) => turn.runId === snapshot.runId);
+  if (existingIndex === -1) return [...turns, snapshot];
+  const next = [...turns];
+  next[existingIndex] = snapshot;
+  return next;
+}
+
+function mergeConversationTurn(current: AgentRunSnapshot, incoming: AgentRunSnapshot) {
+  return {
+    ...current,
+    ...incoming,
+    events: current.events.length ? current.events : incoming.events,
+    toolCalls: current.toolCalls.length ? current.toolCalls : incoming.toolCalls,
+    approvals: current.approvals.length ? current.approvals : incoming.approvals,
+    migrationBlocks: current.migrationBlocks.length ? current.migrationBlocks : incoming.migrationBlocks,
+    contextBuilds: current.contextBuilds.length ? current.contextBuilds : incoming.contextBuilds,
+    loopObservations: current.loopObservations.length ? current.loopObservations : incoming.loopObservations,
+  };
+}
+
+function mergeConversationTurns(current: AgentRunSnapshot[], incoming: AgentRunSnapshot[]) {
+  if (!incoming.length) return current;
+  const incomingByRunId = new Map(incoming.map((turn) => [turn.runId, turn]));
+  const merged = current.map((turn) => {
+    const incomingTurn = incomingByRunId.get(turn.runId);
+    return incomingTurn ? mergeConversationTurn(turn, incomingTurn) : turn;
+  });
+  incoming.forEach((turn) => {
+    if (!current.some((existing) => existing.runId === turn.runId)) merged.push(turn);
+  });
+  return merged;
+}
+
 function toolCallActivityLabel(status: AgentToolCall["status"]) {
   if (status === "succeeded") return "已完成工具调用";
   if (status === "failed" || status === "failed_retryable") return "工具调用失败";
@@ -311,6 +668,52 @@ function toolCallActivityLabel(status: AgentToolCall["status"]) {
   if (status === "manual_intervention") return "需要人工处理工具调用";
   if (["leased", "running_pre_effect", "effect_sent", "reconciling"].includes(status)) return "正在运行工具";
   return "工具调用";
+}
+
+function toolCallDisplayName(toolCall: AgentToolCall) {
+  if (toolCall.toolName === "scenario.compose_draft") return "场景组合";
+  if (toolCall.toolName === "scenario.execute") return "场景执行";
+  if (toolCall.toolName === "case.search") return "用例检索";
+  if (toolCall.toolName === "case.inspect") return "用例分析";
+  return toolCall.backendOperation || toolCall.toolName || "工具调用";
+}
+
+function truncateInline(text: string, maxLength = 72) {
+  const compact = text.replace(/\s+/g, " ").trim();
+  if (compact.length <= maxLength) return compact;
+  return `${compact.slice(0, maxLength - 1)}…`;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+function readNestedString(value: unknown, paths: string[][]) {
+  for (const path of paths) {
+    let current: unknown = value;
+    for (const key of path) {
+      const record = asRecord(current);
+      current = record ? record[key] : undefined;
+    }
+    if (typeof current === "string" && current.trim()) return current.trim();
+  }
+  return "";
+}
+
+function toolCallSummary(toolCall: AgentToolCall) {
+  const requirement = readNestedString(toolCall.inputJsonRedacted, [
+    ["input", "requirement"],
+    ["input", "prompt"],
+    ["input", "intent"],
+    ["requirement"],
+    ["prompt"],
+    ["intent"],
+  ]);
+  if (requirement) return `需求：${truncateInline(requirement)}`;
+  if (toolCall.outputSummary !== undefined && toolCall.outputSummary !== null) return `结果：${truncateInline(stringifyValue(toolCall.outputSummary), 88)}`;
+  if (toolCall.errorMessage) return `错误：${truncateInline(toolCall.errorMessage)}`;
+  if (toolCall.backendOperation) return `操作：${toolCall.backendOperation}`;
+  return "等待工具返回结果";
 }
 
 function formatThinkingElapsed(milliseconds: number) {
@@ -347,8 +750,10 @@ export function AgentsPage({ projectId }: { projectId?: number }) {
   const [runbook, setRunbook] = useState<AgentRunbook | null>(null);
   const [memoryUsage, setMemoryUsage] = useState<AgentMemoryUsageEvent[]>([]);
   const [events, setEvents] = useState<AgentRunEvent[]>([]);
+  const [conversationTurns, setConversationTurns] = useState<AgentRunSnapshot[]>([]);
   const [selectedToolCallId, setSelectedToolCallId] = useState("");
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>("run");
+  const [isInspectorOpen, setIsInspectorOpen] = useState(false);
   const [historySearch, setHistorySearch] = useState("");
   const [historyStatus, setHistoryStatus] = useState<"all" | AgentRunStatus>("all");
   const [isCreating, setIsCreating] = useState(false);
@@ -360,7 +765,7 @@ export function AgentsPage({ projectId }: { projectId?: number }) {
   const [error, setError] = useState("");
   const [thinkingStartedAt, setThinkingStartedAt] = useState<number | null>(null);
   const [thinkingElapsedMs, setThinkingElapsedMs] = useState(0);
-  const lastEventIdRef = useRef<number | undefined>(undefined);
+  const lastEventIdByRunRef = useRef<Map<string, number>>(new Map());
   const abortRef = useRef<AbortController | null>(null);
   const transcriptRef = useRef<HTMLDivElement>(null);
   const promptRef = useRef<HTMLTextAreaElement>(null);
@@ -387,17 +792,23 @@ export function AgentsPage({ projectId }: { projectId?: number }) {
       return String(right.updatedAt ?? right.createdAt ?? "").localeCompare(String(left.updatedAt ?? left.createdAt ?? ""));
     }).filter((item) => {
       const matchesQuery = !query || `${item.title ?? ""} ${item.intent} ${item.runId} ${item.conversationId ?? ""}`.toLowerCase().includes(query);
-      const matchesStatus = historyStatus === "all" || item.status === historyStatus;
+      const matchesStatus = historyStatus === "all" || effectiveHistoryStatus(item, run) === historyStatus;
       return matchesQuery && matchesStatus;
     });
-  }, [historySearch, historyStatus, runHistory]);
-  const transcriptItems = useMemo(() => buildAgentTranscriptItems(events, run?.toolCalls ?? []), [events, run?.toolCalls]);
-  const hasAgentResponse = useMemo(() => transcriptItems.some((item) => item.type === "assistant" || item.type === "tool"), [transcriptItems]);
+  }, [historySearch, historyStatus, run, runHistory]);
+  const activeTranscriptItems = useMemo(() => buildAgentTranscriptItems(events, run?.toolCalls ?? []), [events, run?.toolCalls]);
+  const conversationTranscriptTurns = useMemo(() => {
+    const previousTurns = conversationTurns.filter((turn) => (
+      turn.conversationId === conversationId && turn.runId !== run?.runId
+    ));
+    return run ? [...previousTurns, { ...run, events }] : previousTurns;
+  }, [conversationId, conversationTurns, events, run]);
+  const hasAssistantVisibleResponse = useMemo(() => activeTranscriptItems.some((item) => item.type === "assistant"), [activeTranscriptItems]);
   const isWaitingForAgentResponse = Boolean(
     thinkingStartedAt &&
     run &&
     !error &&
-    !hasAgentResponse &&
+    !hasAssistantVisibleResponse &&
     !terminalRunStatuses.includes(run.status),
   );
 
@@ -428,6 +839,7 @@ export function AgentsPage({ projectId }: { projectId?: number }) {
     setActiveRunId("");
     setRun(null);
     replaceEvents([]);
+    setConversationTurns([]);
     setPrompt("");
     setRunbook(null);
     setMemoryUsage([]);
@@ -436,12 +848,15 @@ export function AgentsPage({ projectId }: { projectId?: number }) {
     setError("");
     setThinkingStartedAt(null);
     setThinkingElapsedMs(0);
-    lastEventIdRef.current = undefined;
     window.setTimeout(() => promptRef.current?.focus(), 0);
   }, [replaceEvents]);
 
   const appendEvent = useCallback((event: AgentRunEvent) => {
-    if (event.sequence !== undefined) lastEventIdRef.current = event.sequence;
+    const eventRunId = event.runId || activeRunId;
+    if (eventRunId && event.sequence !== undefined) {
+      const currentSequence = lastEventIdByRunRef.current.get(eventRunId);
+      lastEventIdByRunRef.current.set(eventRunId, currentSequence === undefined ? event.sequence : Math.max(currentSequence, event.sequence));
+    }
     const identity = eventIdentity(event);
     if (identity && eventKeysRef.current.has(identity)) return;
     if (identity) eventKeysRef.current.add(identity);
@@ -453,39 +868,59 @@ export function AgentsPage({ projectId }: { projectId?: number }) {
       pendingEventsRef.current = [];
       setEvents((current) => appendCompactedEvents(current, nextEvents));
     });
-  }, []);
+  }, [activeRunId]);
 
-  const loadRun = useCallback(async (runId: string) => {
+  const loadRun = useCallback(async (runId: string, conversationIdOverride?: string) => {
     if (!runId) return;
     setIsLoadingRun(true);
     setError("");
     try {
       const snapshot = await getAgentRun(runId);
-      setRun(snapshot);
+      const effectiveSnapshot = conversationIdOverride ? { ...snapshot, conversationId: conversationIdOverride } : snapshot;
+      setRun(effectiveSnapshot);
       replaceEvents(snapshot.events);
-      if (snapshot.conversationId) setConversationId(snapshot.conversationId);
+      if (effectiveSnapshot.conversationId) setConversationId(effectiveSnapshot.conversationId);
       if (snapshot.toolCalls[0]) setSelectedToolCallId((current) => current || snapshot.toolCalls[0].toolCallId);
-      lastEventIdRef.current = snapshot.events.reduce<number | undefined>((last, event) => {
+      const latestSequence = snapshot.events.reduce<number | undefined>((last, event) => {
         if (event.sequence === undefined) return last;
         return last === undefined ? event.sequence : Math.max(last, event.sequence);
       }, undefined);
+      if (latestSequence !== undefined) lastEventIdByRunRef.current.set(runId, latestSequence);
+      if (projectId && effectiveSnapshot.conversationId) {
+        void getAgentConversationTranscript(projectId, effectiveSnapshot.conversationId)
+          .then((transcript) => {
+            const transcriptTurns = transcript.runs.map((turn) => ({
+              ...turn,
+              conversationId: effectiveSnapshot.conversationId,
+            }));
+            if (transcriptTurns.length) {
+              setConversationTurns((current) => mergeConversationTurns(current, transcriptTurns));
+            }
+          })
+          .catch(() => undefined);
+      }
       void getAgentRunbook(runId).then(setRunbook).catch(() => setRunbook(null));
       void getAgentMemoryUsageEvents(runId).then(setMemoryUsage).catch(() => setMemoryUsage([]));
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : "Agent Run 加载失败");
-      setRunHistory((current) => current.map((item) => item.runId === runId ? { ...item, unavailable: true } : item));
+      setRunHistory((current) => {
+        const next = normalizeRunHistory(current.map((item) => item.runId === runId ? { ...item, unavailable: true } : item));
+        localStorage.setItem(historyStorageKey, JSON.stringify(next));
+        return next;
+      });
     } finally {
       setIsLoadingRun(false);
     }
-  }, [replaceEvents]);
+  }, [historyStorageKey, projectId, replaceEvents]);
 
   const rememberRun = useCallback((summary: AgentRunSummary) => {
     setRunHistory((current) => {
-      const previous = current.find((item) => item.runId === summary.runId);
-      const next = [
+      const summaryKey = historyConversationKey(summary);
+      const previous = current.find((item) => historyConversationKey(item) === summaryKey);
+      const next = normalizeRunHistory([
         { ...previous, ...summary, title: previous?.title ?? summary.title, pinned: previous?.pinned ?? summary.pinned },
-        ...current.filter((item) => item.runId !== summary.runId),
-      ].slice(0, AGENT_HISTORY_LIMIT);
+        ...current.filter((item) => historyConversationKey(item) !== summaryKey),
+      ]);
       localStorage.setItem(historyStorageKey, JSON.stringify(next));
       return next;
     });
@@ -493,18 +928,67 @@ export function AgentsPage({ projectId }: { projectId?: number }) {
 
   const updateHistory = useCallback((updater: (current: AgentRunSummary[]) => AgentRunSummary[]) => {
     setRunHistory((current) => {
-      const next = updater(current).slice(0, AGENT_HISTORY_LIMIT);
+      const next = normalizeRunHistory(updater(current));
       localStorage.setItem(historyStorageKey, JSON.stringify(next));
       return next;
     });
   }, [historyStorageKey]);
+
+  const appendFinalAssistantMessage = useCallback((runId: string, content?: string) => {
+    const message = content?.trim();
+    if (!message) return;
+    appendEvent({
+      id: `summary-${runId}`,
+      runId,
+      event: "model.completed",
+      payload: { content: message },
+    });
+  }, [appendEvent]);
+
+  const calibrateRunSummary = useCallback(async (runId: string) => {
+    try {
+      const summary = await getAgentRunSummary(runId);
+      if (summary.assistantVisible !== false) appendFinalAssistantMessage(runId, summary.assistantMessage);
+      if (summary.status) {
+        setRun((current) => current && current.runId === runId ? { ...current, status: summary.status ?? current.status, result: summary.result ?? current.result } : current);
+      }
+    } catch {
+      const snapshot = await getAgentRun(runId);
+      setRun((current) => {
+        const effectiveConversationId = current?.runId === snapshot.runId ? current.conversationId : snapshot.conversationId;
+        return current?.runId === runId ? { ...snapshot, conversationId: effectiveConversationId } : current;
+      });
+      appendFinalAssistantMessage(runId, String(asRecord(snapshot.result)?.message ?? ""));
+    }
+  }, [appendFinalAssistantMessage]);
+
+  useEffect(() => {
+    if (!run) return;
+    setConversationTurns((current) => upsertConversationTurn(current, { ...run, events }));
+    rememberRun({
+      runId: run.runId,
+      projectId: run.projectId,
+      conversationId: run.conversationId,
+      intent: run.intent,
+      status: run.status,
+      runtimeSnapshotId: run.runtimeSnapshotId,
+      localOnly: true,
+      updatedAt: run.updatedAt,
+      createdAt: run.createdAt,
+    });
+  }, [events, rememberRun, run]);
 
   useEffect(() => {
     setHistoryLoading(true);
     const raw = localStorage.getItem(historyStorageKey);
     if (raw) {
       try {
-        setRunHistory(JSON.parse(raw) as AgentRunSummary[]);
+        const parsed = JSON.parse(raw) as AgentRunSummary[];
+        const normalized = normalizeRunHistory(parsed);
+        setRunHistory(normalized);
+        if (JSON.stringify(parsed) !== JSON.stringify(normalized)) {
+          localStorage.setItem(historyStorageKey, JSON.stringify(normalized));
+        }
       } catch {
         setRunHistory([]);
       }
@@ -560,21 +1044,37 @@ export function AgentsPage({ projectId }: { projectId?: number }) {
       for (let attempt = 0; attempt <= reconnectLimit && !controller.signal.aborted; attempt += 1) {
         updateStreamState(attempt === 0 ? "connecting" : "reconnecting");
         try {
-          await subscribeAgentRunEvents(
+          const beforeSequence = lastEventIdByRunRef.current.get(activeRunId);
+          const streamResult = await subscribeAgentRunEvents(
             activeRunId,
             (event) => {
               if (!controller.signal.aborted) updateStreamState("streaming");
               appendEvent(event);
             },
             {
-              lastEventId: lastEventIdRef.current,
+              lastEventId: beforeSequence,
               signal: controller.signal,
             },
           );
-          if (!controller.signal.aborted) updateStreamState("closed");
+          if (controller.signal.aborted) return;
+          const afterSequence = lastEventIdByRunRef.current.get(activeRunId) ?? beforeSequence;
+          if (streamResult.eventCount === 0 || afterSequence === beforeSequence) {
+            const snapshot = await getAgentRunEventSnapshot(activeRunId, afterSequence);
+            snapshot.events.forEach(appendEvent);
+            if (snapshot.nextAfterSequence !== undefined) lastEventIdByRunRef.current.set(activeRunId, snapshot.nextAfterSequence);
+            if (snapshot.terminal) await calibrateRunSummary(activeRunId);
+          }
+          updateStreamState("closed");
           return;
         } catch (nextError) {
           if (controller.signal.aborted) return;
+          await getAgentRunEventSnapshot(activeRunId, lastEventIdByRunRef.current.get(activeRunId))
+            .then((snapshot) => {
+              snapshot.events.forEach(appendEvent);
+              if (snapshot.nextAfterSequence !== undefined) lastEventIdByRunRef.current.set(activeRunId, snapshot.nextAfterSequence);
+              if (snapshot.terminal) void calibrateRunSummary(activeRunId);
+            })
+            .catch(() => undefined);
           if (attempt >= reconnectLimit) {
             updateStreamState("error");
             setMessage(nextError instanceof Error ? nextError.message : "Agent 事件流连接失败");
@@ -588,7 +1088,7 @@ export function AgentsPage({ projectId }: { projectId?: number }) {
     void connect();
 
     return () => controller.abort();
-  }, [activeRunId, appendEvent, run?.status, updateStreamState]);
+  }, [activeRunId, appendEvent, calibrateRunSummary, run?.status, updateStreamState]);
 
   const refreshRun = useCallback(async () => {
     if (activeRunId) await loadRun(activeRunId);
@@ -641,27 +1141,42 @@ export function AgentsPage({ projectId }: { projectId?: number }) {
       }
     }
 
+    if (isStaleWorkerLostEvent(latest)) {
+      setThinkingStartedAt(null);
+      setThinkingElapsedMs(0);
+      setError("后端执行进程中断，当前 Agent Run 已停止。可以重新发送目标或使用 Runbook 的恢复动作重试。");
+      setRun((current) => current && current.runId === activeRunId ? {
+        ...current,
+        status: "failed",
+        errorCode: eventErrorCode(latest),
+        errorMessage: String(latest.payload.message ?? latest.payload.error_message ?? latest.payload.errorMessage ?? "后端执行进程中断"),
+      } : current);
+    }
+
     if (latest.event.startsWith("run.")) {
       void getAgentRun(activeRunId).then((snapshot) => {
-        setRun(snapshot);
+        const effectiveConversationId = run?.runId === snapshot.runId ? run.conversationId : snapshot.conversationId;
+        const effectiveSnapshot = effectiveConversationId ? { ...snapshot, conversationId: effectiveConversationId } : snapshot;
+        setRun(effectiveSnapshot);
         rememberRun({
-          runId: snapshot.runId,
-          projectId: snapshot.projectId,
-          conversationId: snapshot.conversationId,
-          intent: snapshot.intent,
-          status: snapshot.status,
-          runtimeSnapshotId: snapshot.runtimeSnapshotId,
+          runId: effectiveSnapshot.runId,
+          projectId: effectiveSnapshot.projectId,
+          conversationId: effectiveSnapshot.conversationId,
+          intent: effectiveSnapshot.intent,
+          status: effectiveSnapshot.status,
+          runtimeSnapshotId: effectiveSnapshot.runtimeSnapshotId,
           localOnly: true,
-          updatedAt: snapshot.updatedAt,
-          createdAt: snapshot.createdAt,
+          updatedAt: effectiveSnapshot.updatedAt,
+          createdAt: effectiveSnapshot.createdAt,
         });
+        if (terminalRunStatuses.includes(effectiveSnapshot.status)) void calibrateRunSummary(activeRunId);
       }).catch(() => undefined);
     }
 
     if (/^(approval|migration|context|loop|memory)\./.test(latest.event)) {
       void refreshGovernanceData(activeRunId, latest.event);
     }
-  }, [activeRunId, events, refreshGovernanceData, rememberRun]);
+  }, [activeRunId, calibrateRunSummary, events, refreshGovernanceData, rememberRun, run?.conversationId, run?.runId]);
 
   const handleCreateRun = async () => {
     const intent = prompt.trim();
@@ -674,9 +1189,10 @@ export function AgentsPage({ projectId }: { projectId?: number }) {
     setError("");
     setMessage("");
     try {
+      const currentConversationId = conversationId;
       const queued = await createAgentRun({
         projectId,
-        conversationId,
+        conversationId: currentConversationId,
         intent,
         maxIterations,
         autoComplete,
@@ -688,7 +1204,7 @@ export function AgentsPage({ projectId }: { projectId?: number }) {
       setRun({
         runId: queued.runId,
         projectId,
-        conversationId: queued.conversationId ?? conversationId,
+        conversationId: currentConversationId,
         intent,
         status: queued.status,
         currentIteration: 0,
@@ -709,7 +1225,7 @@ export function AgentsPage({ projectId }: { projectId?: number }) {
       rememberRun({
         runId: queued.runId,
         projectId,
-        conversationId: queued.conversationId ?? conversationId,
+        conversationId: currentConversationId,
         intent,
         status: queued.status,
         runtimeSnapshotId: queued.runtimeSnapshotId,
@@ -717,7 +1233,7 @@ export function AgentsPage({ projectId }: { projectId?: number }) {
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       });
-      await loadRun(queued.runId);
+      await loadRun(queued.runId, currentConversationId);
     } catch (nextError) {
       setThinkingStartedAt(null);
       setThinkingElapsedMs(0);
@@ -744,12 +1260,14 @@ export function AgentsPage({ projectId }: { projectId?: number }) {
   const renameHistoryItem = (item: AgentRunSummary) => {
     const nextTitle = window.prompt("重命名本地对话", item.title || item.intent || item.runId);
     if (nextTitle === null) return;
-    updateHistory((current) => current.map((entry) => entry.runId === item.runId ? { ...entry, title: nextTitle.trim() || entry.intent } : entry));
+    const itemKey = historyConversationKey(item);
+    updateHistory((current) => current.map((entry) => historyConversationKey(entry) === itemKey ? { ...entry, title: nextTitle.trim() || entry.intent } : entry));
   };
 
   const deleteHistoryItem = (item: AgentRunSummary) => {
-    updateHistory((current) => current.filter((entry) => entry.runId !== item.runId));
-    if (item.runId === activeRunId) {
+    const itemKey = historyConversationKey(item);
+    updateHistory((current) => current.filter((entry) => historyConversationKey(entry) !== itemKey));
+    if (item.runId === activeRunId || item.conversationId === conversationId) {
       setActiveRunId("");
       setRun(null);
       replaceEvents([]);
@@ -759,7 +1277,8 @@ export function AgentsPage({ projectId }: { projectId?: number }) {
   };
 
   const togglePinHistoryItem = (item: AgentRunSummary) => {
-    updateHistory((current) => current.map((entry) => entry.runId === item.runId ? { ...entry, pinned: !entry.pinned } : entry));
+    const itemKey = historyConversationKey(item);
+    updateHistory((current) => current.map((entry) => historyConversationKey(entry) === itemKey ? { ...entry, pinned: !entry.pinned } : entry));
   };
 
   const exportConversation = (item: AgentRunSummary) => {
@@ -835,6 +1354,7 @@ export function AgentsPage({ projectId }: { projectId?: number }) {
     if (action === "tool_call_detail") {
       if (safeAction.targetId) setSelectedToolCallId(safeAction.targetId);
       setInspectorTab("tool");
+      setIsInspectorOpen(true);
       return;
     }
     setMessage("该 Runbook safe action 仍是目标契约，当前前端不会调用不存在的后端接口。");
@@ -872,11 +1392,11 @@ export function AgentsPage({ projectId }: { projectId?: number }) {
 
   useEffect(() => {
     if (!thinkingStartedAt) return;
-    if (hasAgentResponse || error || run && terminalRunStatuses.includes(run.status)) {
+    if (hasAssistantVisibleResponse || error || run && terminalRunStatuses.includes(run.status)) {
       setThinkingStartedAt(null);
       setThinkingElapsedMs(0);
     }
-  }, [error, hasAgentResponse, run, thinkingStartedAt]);
+  }, [error, hasAssistantVisibleResponse, run, thinkingStartedAt]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -905,7 +1425,7 @@ export function AgentsPage({ projectId }: { projectId?: number }) {
 
   return (
     <section className="page agents-page agent-codex-page">
-      <div className="agent-codex-layout">
+      <div className={isInspectorOpen ? "agent-codex-layout" : "agent-codex-layout inspector-collapsed"}>
         <aside className="agent-codex-rail" aria-label="Agent 运行上下文">
           <div className="agent-rail-brand">
             <span><Icon name="smart_toy" /></span>
@@ -933,7 +1453,7 @@ export function AgentsPage({ projectId }: { projectId?: number }) {
                 <input
                   aria-label="搜索本地 Agent 历史"
                   onChange={(event) => setHistorySearch(event.target.value)}
-                  placeholder="搜索 prompt / run"
+                  placeholder="搜索目标 / 状态"
                   ref={historySearchRef}
                   value={historySearch}
                 />
@@ -953,20 +1473,19 @@ export function AgentsPage({ projectId }: { projectId?: number }) {
             {filteredHistory.length ? (
               <div className="agent-history-list">
                 {filteredHistory.map((item) => (
-                  <article className={item.runId === activeRunId ? "agent-history-item active" : "agent-history-item"} key={item.runId}>
+                  <article className={item.runId === activeRunId ? "agent-history-item active" : "agent-history-item"} key={historyConversationKey(item)}>
                     <button
                       className="agent-history-open"
                       onClick={() => {
                         setActiveRunId(item.runId);
                         setConversationId(item.conversationId || createLocalConversationId());
-                        setPrompt(item.intent || "");
-                        void loadRun(item.runId);
+                        setPrompt("");
+                        void loadRun(item.runId, item.conversationId);
                       }}
                       type="button"
                     >
-                      <strong>{item.title || item.intent || item.runId}</strong>
-                      <small>{item.conversationId || "local history"} · {item.runId}</small>
-                      <StatusBadge status={item.status} />
+                      <strong>{item.title || item.intent || "未命名对话"}</strong>
+                      <StatusBadge status={effectiveHistoryStatus(item, run)} />
                       {item.unavailable && <small>远端不可用</small>}
                     </button>
                     <div className="agent-history-actions" aria-label="本地历史操作">
@@ -991,17 +1510,9 @@ export function AgentsPage({ projectId }: { projectId?: number }) {
             )}
           </div>
           <div className="agent-rail-section">
-            <span>Conversation</span>
-            <strong>{conversationId}</strong>
-          </div>
-          <div className="agent-rail-section">
-            <span>当前 Run</span>
-            <strong>{run?.runId || "尚未创建"}</strong>
+            <span>当前状态</span>
+            <strong>{run ? statusLabel(run.status) : "尚未创建"}</strong>
             {run && <StatusBadge status={run.status} />}
-          </div>
-          <div className="agent-rail-section">
-            <span>Runtime Snapshot</span>
-            <strong>{run?.runtimeSnapshotId || "等待后端返回"}</strong>
           </div>
           <div className="agent-rail-metrics">
             <Metric label="Iteration" value={run ? `${run.currentIteration}/${run.maxIterations || "-"}` : "-"} />
@@ -1037,6 +1548,16 @@ export function AgentsPage({ projectId }: { projectId?: number }) {
               <span>从目标出发，持续展示计划、工具调用、审批、迁移和结果。</span>
             </div>
             <div className="agent-thread-header-actions">
+              <button
+                aria-expanded={isInspectorOpen}
+                aria-label={isInspectorOpen ? "收起右侧详情" : "展开右侧详情"}
+                className="agent-inspector-toggle"
+                onClick={() => setIsInspectorOpen((current) => !current)}
+                title={isInspectorOpen ? "收起右侧详情" : "展开右侧详情"}
+                type="button"
+              >
+                <Icon name={isInspectorOpen ? "right_panel_close" : "right_panel_open"} />
+              </button>
               <ReadinessPill dashboard={dashboard} />
               <span className={`agent-stream-state ${streamState}`}>
                 {streamState === "streaming" ? "SSE 已连接" : streamState === "connecting" ? "连接中" : streamState === "reconnecting" ? "重连中" : streamState === "error" ? "连接失败" : streamState === "closed" ? "连接已关闭" : "未连接"}
@@ -1045,93 +1566,101 @@ export function AgentsPage({ projectId }: { projectId?: number }) {
           </header>
 
           <div className="agent-thread-scroll" aria-live="polite" ref={transcriptRef}>
-            {run && (
-              <ThreadMessage icon="person" meta="用户目标" title={run.intent || prompt} variant="user">
-                <p>{run.intent || prompt}</p>
-                <div className="agent-thread-tags">
-                  <span>project_id: {run.projectId}</span>
-                  <span>max_iterations: {run.maxIterations || maxIterations}</span>
-                  <span>auto_complete: {run.autoComplete ? "true" : "false"}</span>
-                  <span>conversation_id: {run.conversationId || conversationId}</span>
-                  <span>{statusLabel(run.status)}</span>
-                </div>
-              </ThreadMessage>
-            )}
+            {conversationTranscriptTurns.map((turn) => {
+              const turnTranscriptItems = buildAgentTranscriptItems(turn.events, turn.toolCalls);
+              const isActiveTurn = turn.runId === run?.runId;
+              const turnPendingApprovals = turn.approvals.filter((approval) => approval.status === "pending");
+              const turnOpenMigrationBlocks = turn.migrationBlocks.filter((block) => block.status === "open");
 
-            {error && (
-              <ThreadMessage icon="error" meta="错误" title={error} tone="danger" />
-            )}
+              return (
+                <Fragment key={turn.runId}>
+                  <ThreadMessage icon="person" meta="用户目标" title={turn.intent || prompt} variant="user">
+                    <p>{turn.intent || prompt}</p>
+                    <div className="agent-thread-tags">
+                      <span>循环上限：{turn.maxIterations || maxIterations}</span>
+                      <span>自动完成：{turn.autoComplete ? "是" : "否"}</span>
+                      <span>{statusLabel(turn.status)}</span>
+                    </div>
+                  </ThreadMessage>
 
-            {isWaitingForAgentResponse && <ThinkingMessage elapsedMs={thinkingElapsedMs} />}
+                  {isActiveTurn && error && (
+                    <ThreadMessage icon="error" meta="错误" title={error} tone="danger" />
+                  )}
 
-            {events.length === 0 && !run && (
+                  {isActiveTurn && isWaitingForAgentResponse && <ThinkingMessage elapsedMs={thinkingElapsedMs} />}
+
+                  {turnTranscriptItems.map((item) => {
+                    if (item.type === "assistant") {
+                      return <AssistantMessage content={item.content} key={`${turn.runId}-${item.key}`} meta={item.meta} />;
+                    }
+                    if (item.type === "tool") {
+                      return (
+                        <ToolCallThreadMessage
+                          index={item.index}
+                          key={`${turn.runId}-${item.key}`}
+                          onSelect={() => {
+                            setSelectedToolCallId(item.toolCall.toolCallId);
+                            setInspectorTab("tool");
+                            setIsInspectorOpen(true);
+                          }}
+                          toolCall={item.toolCall}
+                        />
+                      );
+                    }
+                    return <ThreadEvent event={item.event} key={`${turn.runId}-${item.key}`} />;
+                  })}
+
+                  {turn.contextBuilds.map((contextBuild) => (
+                    <ThreadMessage
+                      icon="manage_search"
+                      key={`${turn.runId}-${contextBuild.contextBuildId}`}
+                      meta="Context Build"
+                      title={contextBuild.degradationReason || contextBuild.status || "上下文构建结果"}
+                      tone={contextBuild.degradationReason ? "warning" : "default"}
+                    >
+                      <ContextBuildSummary contextBuild={contextBuild} />
+                    </ThreadMessage>
+                  ))}
+
+                  {turn.loopObservations.map((observation) => (
+                    <ThreadMessage
+                      icon="cycle"
+                      key={`${turn.runId}-${observation.observationId}`}
+                      meta="Loop Observation"
+                      title={observation.rootCause || observation.stopReason || "循环观察"}
+                      tone="warning"
+                    >
+                      <LoopObservationSummary observation={observation} />
+                    </ThreadMessage>
+                  ))}
+
+                  {turnPendingApprovals.map((approval) => (
+                    <ThreadMessage icon="approval" key={`${turn.runId}-${approval.approvalId}`} meta="需要审批" title="工具调用等待人工确认" tone="warning">
+                      <ApprovalCard
+                        approval={approval}
+                        disabled={isActing}
+                        onApprove={() => handleApprovalAction(approval, "approve")}
+                        onReject={() => handleApprovalAction(approval, "reject")}
+                      />
+                    </ThreadMessage>
+                  ))}
+
+                  {turnOpenMigrationBlocks.map((block) => (
+                    <ThreadMessage icon="running_with_errors" key={`${turn.runId}-${block.blockId}`} meta="迁移阻断" title={block.reason || "迁移阻断"} tone="warning">
+                      <MigrationCard block={block} disabled={isActing} onResolve={() => handleResolveBlock(block)} />
+                    </ThreadMessage>
+                  ))}
+                </Fragment>
+              );
+            })}
+
+            {conversationTranscriptTurns.length === 0 && (
               <div className="agent-thread-empty">
                 <Icon name="terminal" />
                 <strong>我们应该做什么</strong>
                 <span>发送目标后，TESTAI 的计划、工具调用和执行结果会显示在这里。</span>
               </div>
             )}
-
-            {transcriptItems.map((item) => {
-              if (item.type === "assistant") {
-                return <AssistantMessage content={item.content} key={item.key} meta={item.meta} />;
-              }
-              if (item.type === "tool") {
-                return (
-                  <ToolCallThreadMessage
-                    index={item.index}
-                    key={item.key}
-                    onSelect={() => {
-                      setSelectedToolCallId(item.toolCall.toolCallId);
-                      setInspectorTab("tool");
-                    }}
-                    toolCall={item.toolCall}
-                  />
-                );
-              }
-              return <ThreadEvent event={item.event} key={item.key} />;
-            })}
-
-            {run?.contextBuilds.map((contextBuild) => (
-              <ThreadMessage
-                icon="manage_search"
-                key={contextBuild.contextBuildId}
-                meta="Context Build"
-                title={contextBuild.degradationReason || contextBuild.status || contextBuild.contextBuildId}
-                tone={contextBuild.degradationReason ? "warning" : "default"}
-              >
-                <ContextBuildSummary contextBuild={contextBuild} />
-              </ThreadMessage>
-            ))}
-
-            {run?.loopObservations.map((observation) => (
-              <ThreadMessage
-                icon="cycle"
-                key={observation.observationId}
-                meta="Loop Observation"
-                title={observation.rootCause || observation.stopReason || observation.observationId}
-                tone="warning"
-              >
-                <LoopObservationSummary observation={observation} />
-              </ThreadMessage>
-            ))}
-
-            {pendingApprovals.map((approval) => (
-              <ThreadMessage icon="approval" key={approval.approvalId} meta="需要审批" title={`ToolCall ${approval.toolCallId || approval.approvalId} 等待人工确认`} tone="warning">
-                <ApprovalCard
-                  approval={approval}
-                  disabled={isActing}
-                  onApprove={() => handleApprovalAction(approval, "approve")}
-                  onReject={() => handleApprovalAction(approval, "reject")}
-                />
-              </ThreadMessage>
-            ))}
-
-            {openMigrationBlocks.map((block) => (
-              <ThreadMessage icon="running_with_errors" key={block.blockId} meta="迁移阻断" title={block.reason || block.blockId} tone="warning">
-                <MigrationCard block={block} disabled={isActing} onResolve={() => handleResolveBlock(block)} />
-              </ThreadMessage>
-            ))}
           </div>
 
           <form
@@ -1194,7 +1723,8 @@ export function AgentsPage({ projectId }: { projectId?: number }) {
           </form>
         </main>
 
-        <RunInspector
+        {isInspectorOpen && (
+          <RunInspector
           activeToolCall={activeToolCall}
           alerts={alerts}
           dashboard={dashboard}
@@ -1215,7 +1745,8 @@ export function AgentsPage({ projectId }: { projectId?: number }) {
           releaseGates={releaseGates}
           selectedTab={inspectorTab}
           setSelectedTab={setInspectorTab}
-        />
+          />
+        )}
       </div>
     </section>
   );
@@ -1254,6 +1785,7 @@ function ThreadEvent({ event }: { event: AgentRunEvent }) {
   const isAttention = event.event.includes("uncertain") || event.event.includes("migration") || event.event.includes("approval");
   const content = event.payload.content ?? event.payload.delta ?? event.payload.message;
   const hasPayload = Object.keys(event.payload).length > 0;
+  const title = eventDisplayTitle(event.event);
 
   return (
     <article className={isAttention ? "agent-thread-message warning compact" : "agent-thread-message compact"}>
@@ -1262,7 +1794,7 @@ function ThreadEvent({ event }: { event: AgentRunEvent }) {
       </div>
       <div className="agent-thread-body">
         <span>{event.sequence ? `#${event.sequence}` : "event"} · {event.createdAt || "实时"}</span>
-        <h3>{event.event}</h3>
+        <h3>{title}</h3>
         {content !== undefined ? <MarkdownContent content={String(content)} /> : null}
         {hasPayload && content === undefined ? (
           <details className="agent-event-payload">
@@ -1440,14 +1972,9 @@ function RunInspector({
           <PanelTitle icon="fact_check" title="Run Summary" />
           {run ? (
             <div className="agent-detail-grid">
-              <KeyValue label="run_id" value={run.runId} />
-              <KeyValue label="conversation_id" value={run.conversationId} />
-              <KeyValue label="project_id" value={run.projectId} />
-              <KeyValue label="status" value={run.status} />
-              <KeyValue label="runtime_snapshot_id" value={run.runtimeSnapshotId} />
-              <KeyValue label="last_event_sequence" value={run.lastEventSequence} />
-              <KeyValue label="iteration" value={`${run.currentIteration}/${run.maxIterations}`} />
-              <KeyValue label="auto_complete" value={run.autoComplete ? "true" : "false"} />
+              <KeyValue label="状态" value={statusLabel(run.status)} />
+              <KeyValue label="循环进度" value={`${run.currentIteration}/${run.maxIterations}`} />
+              <KeyValue label="自动完成" value={run.autoComplete ? "是" : "否"} />
               {(run.errorCode || run.errorMessage) && (
                 <div className="agent-error-box">
                   <strong>{run.errorCode || "run_error"}</strong>
@@ -1606,7 +2133,6 @@ function RunInspector({
 function ContextBuildSummary({ contextBuild }: { contextBuild: AgentContextBuild }) {
   return (
     <div className="agent-detail-grid">
-      <KeyValue label="context_build_id" value={contextBuild.contextBuildId} />
       <KeyValue label="status" value={contextBuild.status} />
       <KeyValue label="degradation_reason" value={contextBuild.degradationReason} />
       <div className="agent-json-block">
@@ -1620,7 +2146,6 @@ function ContextBuildSummary({ contextBuild }: { contextBuild: AgentContextBuild
 function LoopObservationSummary({ observation }: { observation: AgentLoopObservation }) {
   return (
     <div className="agent-detail-grid">
-      <KeyValue label="observation_id" value={observation.observationId} />
       <KeyValue label="stop_reason" value={observation.stopReason} />
       <KeyValue label="mitigation" value={observation.mitigation} />
       <div className="agent-json-block">
@@ -1646,18 +2171,13 @@ function ApprovalCard({
   return (
     <div className="agent-governance-card">
       <div className="agent-card-head">
-        <strong>{approval.approvalId}</strong>
+        <strong>审批确认</strong>
         <StatusBadge status={approval.status} />
       </div>
-      <KeyValue label="ToolCall" value={approval.toolCallId} />
-      <KeyValue label="Input Hash" value={approval.inputHash} />
-      <KeyValue label="Runtime Snapshot" value={approval.runtimeSnapshotId} />
-      <KeyValue label="Resource Scope" value={approval.resourceScopeHash} />
       <KeyValue label="Risk" value={approval.riskReason} />
       <KeyValue label="Permission" value={approval.permissionScope} />
       <KeyValue label="Epoch" value={approval.approvalEpoch} />
       <KeyValue label="Expires At" value={approval.expiresAt} />
-      {approval.supersededByToolCallId && <KeyValue label="Superseded By" value={approval.supersededByToolCallId} />}
       <div className="agent-card-actions">
         <button className="btn primary" disabled={disabled || stale} onClick={onApprove} type="button">批准</button>
         <button className="btn" disabled={disabled || stale} onClick={onReject} type="button">拒绝</button>
@@ -1670,11 +2190,10 @@ function MigrationCard({ block, disabled, onResolve }: { block: AgentMigrationBl
   return (
     <div className="agent-governance-card warning">
       <div className="agent-card-head">
-        <strong>{block.blockType || block.blockId}</strong>
+        <strong>{block.blockType || "迁移阻断"}</strong>
         <StatusBadge status={block.status} />
       </div>
       <KeyValue label="Reason" value={block.reason} />
-      <KeyValue label="ToolCall" value={block.toolCallId} />
       <KeyValue label="Backend Contract" value={block.backendContractVersion} />
       <KeyValue label="Unsupported Schema" value={block.unsupportedSchema} />
       <KeyValue label="Freshness Gate" value={block.freshnessGateResult} />
@@ -1693,7 +2212,6 @@ function ToolCallDetail({ toolCall }: { toolCall: AgentToolCall }) {
       <KeyValue label="Tool" value={`${toolCall.toolName}${toolCall.toolVersion ? `@${toolCall.toolVersion}` : ""}`} />
       <KeyValue label="Status" value={statusLabel(toolCall.status)} />
       <KeyValue label="Effect State" value={toolCall.effectSubmissionState} />
-      <KeyValue label="Idempotency Key" value={toolCall.idempotencyKey} />
       <KeyValue label="Side Effect" value={toolCall.resolvedSideEffectClass} />
       <KeyValue label="Replay Policy" value={toolCall.resolvedReplayPolicy} />
       <KeyValue label="Backend" value={toolCall.backendName} />
@@ -1749,18 +2267,16 @@ function ToolCallDetail({ toolCall }: { toolCall: AgentToolCall }) {
 }
 
 function ToolCallTranscript({ index, onSelect, toolCall }: { index: number; onSelect: () => void; toolCall: AgentToolCall }) {
-  const outputPreview =
-    toolCall.outputJsonRedacted !== undefined && toolCall.outputJsonRedacted !== null
-      ? `输出 ${stringifyValue(toolCall.outputJsonRedacted)}`
-      : toolCall.backendOperation || toolCall.effectSubmissionState || toolCall.toolCallId;
+  const displayName = toolCallDisplayName(toolCall);
+  const summary = toolCallSummary(toolCall);
 
   return (
     <details className="agent-tool-transcript">
       <summary>
         <span className="agent-tool-activity-copy">
-          <small>ToolCall {index}</small>
-          <strong>{toolCallActivityLabel(toolCall.status)} · {toolCall.toolName || toolCall.backendOperation || toolCall.toolCallId}</strong>
-          <small>{outputPreview}</small>
+          <small>工具调用 {index}</small>
+          <strong>{toolCallActivityLabel(toolCall.status)} · {displayName}</strong>
+          <small>{summary}</small>
         </span>
         <StatusBadge status={toolCall.status} />
       </summary>
