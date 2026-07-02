@@ -119,9 +119,9 @@
 - 左右栏为辅助信息，不得挤压中间 transcript；右侧 Inspector 初始收起以优先保留主线程，宽屏可通过详情按钮展开，窄桌面可隐藏右侧详情并保留主线程。
 - 中间 transcript 必须以工作线程阅读体验为主：连续 `assistant.delta`、`assistant.message`、`model.delta` 和 `model.message` 合并为一段 Agent 回复并渲染 Markdown 段落、标题、无序列表、有序列表、表格、代码围栏、引用、分隔线、粗体和行内代码，不允许把流式文本片段拆成多条对话卡，也不能把 ` ``` `、`---`、`1.`、`| 表头 |` 这类块级 Markdown 标记裸露成普通文本。
 - 工具、命令、执行和输出结果必须按事件位置以轻量内联折叠块展示，折叠态至少露出业务化工具名、状态和关键参数摘要（例如“场景组合”“需求：创建企业场景”），展开态展示 redacted input/output；模型内部 `agent_tool_request` 代码块、包含 `tool_name` 的工具请求 JSON、`model.tool_request_detected` 和 `tool.planned/running/completed` 这类低层过程事件不得作为普通 Agent 回复或事件卡展示；右侧 Inspector 只作为详情补充，不能替代中央线程中的调用痕迹。
-- `run.queued`、`run.started`、`run.completed` 等 `run.*` 生命周期事件不进入中央 transcript；其他 `*.started`、`*.completed` 低层原始 payload 默认折叠为“原始输出”，用户需要排查时再展开查看 JSON，避免 start/completed 事件把主线程撑成日志面板。
-- Composer 的 Enter 键发送必须符合对话工具习惯，Shift+Enter 才换行；发送成功后输入框清空。等待模型或工具返回时，线程中展示带点状动效和耗时计数的“正在思考”轻量活动行，真实回复到达后自动移除。
-- ToolCall、Approval、Migration、ContextBuild 和 LoopObservation 在时间线中以紧凑折叠块呈现，完整 JSON、权限、CAS、Memory 证据和 runbook 诊断进入右侧详情或可展开区域。
+- `run.queued`、`run.started`、`run.completed` 等 `run.*` 生命周期事件不进入中央 transcript；低层 `model.*`、`context.*`、`loop.*`、`memory.*` 审计事件不作为普通对话卡展示，避免 start/completed 或 raw payload 把主线程撑成日志面板。
+- Composer 的 Enter 键发送必须符合对话工具习惯，Shift+Enter 才换行；发送成功后输入框清空。等待模型或工具返回时，线程中展示带点状动效和耗时计数的“正在思考”轻量活动行，真实回复到达后自动移除。当前 run 有 pending approval 时，composer 上方显示轻量审批确认条，使用警告语义、工具名、权限/风险摘要和“是/否”按钮；该确认条不得展示 approval id、tool call id、hash、snapshot 或 lineage。
+- ToolCall、Approval、Migration 和必要的 ContextBuild 在中央时间线中以紧凑折叠块呈现；LoopObservation 属于审计/debug 信息，不作为中央对话卡片展示。完整 JSON、权限、CAS、Memory 证据、LoopObservation 和 runbook 诊断进入右侧详情、timeline/debug、summary 或导出数据；Approval 的底部确认条是当前用户的主决策入口，右侧 Inspector 只作为细节补充。
 - 历史列表必须明确本地 MVP 与服务端历史的边界，不能用视觉文案暗示跨设备历史已经可用。
 - TESTAI 普通工作区不得把 `run_id`、`conversation_id`、`runtime_snapshot_id`、hash、sequence 等机器标识当作卡片摘要、侧栏字段或 Run Summary 展示；优先使用目标标题、状态、循环进度、工具名、风险原因和可执行动作。
 - 历史项的置顶、重命名、导出和删除使用图标按钮时必须提供 `aria-label`；快捷键入口不能替代可见按钮。
@@ -171,6 +171,7 @@
 - 遮罩覆盖完整视口；弹窗宽度按任务复杂度选择，不以“大”代替清晰分组。
 - 标题说明操作对象，正文说明影响，主操作与取消操作置于底部右侧。
 - 删除确认必须显示对象名称或影响范围；忙碌期间禁用重复提交和关闭风险入口。
+- Agent approval 确认使用贴近 composer 的底部确认条而非全屏遮罩，按钮文案保持“是/否”，同时用 `aria-label` 表达完整动作；忙碌期间两个决策按钮都禁用。
 - AI 生成类弹窗必须区分“生成草稿”和“确认保存”两个动作；warnings 使用警告语义就近展示，任何会真实执行候选用例或调用业务接口的开关都必须默认关闭并要求二次确认。
 - AI Run 执行面板必须把模型输出、步骤事件和工具调用合并为单一流式输出，并在新返回到达时自动展示最新内容；不再为工具调用单独拆分调用历史区域。
 - AI 生成结果预览中的节点数据优先用名称、路径、目标字段、期望值等结构化短行展示；原始复杂 JSON 只放在可展开的 config 详情里兜底。
@@ -234,7 +235,7 @@
 - [ ] hover、focus-visible、键盘操作和 reduced-motion 行为可用。
 - [ ] 长名称、长错误、长 JSON、无数据和高数据量不会破坏布局。
 - [ ] 语义状态同时有文字/图标或形状，不只依赖颜色。
-- [ ] 复杂页面至少在主要桌面视口和窄桌面视口进行视觉核验。
+- [ ] 复杂页面和样式相关修改至少在 `1920×1080` 桌面视口截图核验正常；必要时补充窄桌面视口核验。
 - [ ] UI 行为变化已同步模块架构文档和 `docs/frontend-feature-logic.md`。
 - [ ] 新增视觉模式或规范变化已同步本文和 `docs/README.md`。
 - [ ] 已运行 `npm run docs:check`、`npm test -- --run` 和 `npm run build`。

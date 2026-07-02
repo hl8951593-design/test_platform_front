@@ -37,6 +37,23 @@ function sseStreamResponse(chunks: string[]) {
   } as Response;
 }
 
+function delayedSseStreamResponse(chunks: string[], delayMs = 20) {
+  const encoder = new TextEncoder();
+  return {
+    ok: true,
+    status: 200,
+    body: new ReadableStream({
+      start(controller) {
+        window.setTimeout(() => {
+          chunks.forEach((chunk) => controller.enqueue(encoder.encode(chunk)));
+          controller.close();
+        }, delayMs);
+      },
+    }),
+    json: async () => null,
+  } as Response;
+}
+
 function mockAgentFetch() {
   return vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const url = String(input);
@@ -434,6 +451,24 @@ describe("AgentsPage", () => {
     localStorage.clear();
   });
 
+  it("defaults the agent loop limit to 8 when creating a run", async () => {
+    const fetchMock = mockAgentFetch();
+    render(<AgentsPage projectId={7} />);
+
+    expect(screen.getByLabelText("最大循环次数")).toHaveValue(8);
+
+    fireEvent.change(screen.getByLabelText("Agent 目标描述"), { target: { value: "生成登录测试计划" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送 Agent Run" }));
+
+    await waitFor(() => {
+      const createCall = fetchMock.mock.calls.find((call) => String(call[0]).endsWith("/agents/runs") && call[1]?.method === "POST");
+      expect(createCall).toBeTruthy();
+      expect(JSON.parse(String(createCall?.[1]?.body))).toMatchObject({
+        max_iterations: 8,
+      });
+    });
+  });
+
   it("creates an Agent run, stores local history, and submits approval CAS", async () => {
     const fetchMock = mockAgentFetch();
     const { container } = render(<AgentsPage projectId={7} />);
@@ -450,13 +485,11 @@ describe("AgentsPage", () => {
     expect(screen.queryByText("run.queued")).not.toBeInTheDocument();
     expect(screen.queryByText("run.started")).not.toBeInTheDocument();
     expect(screen.queryByText("run.completed")).not.toBeInTheDocument();
-    expect(screen.getByText("模型调用开始")).toBeInTheDocument();
-    expect(screen.getByText("工具发送意图已记录")).toBeInTheDocument();
+    expect(screen.queryByText("模型调用开始")).not.toBeInTheDocument();
+    expect(screen.queryByText("工具发送意图已记录")).not.toBeInTheDocument();
     expect(screen.queryByText("model.started")).not.toBeInTheDocument();
     expect(screen.queryByText("tool.send_intent_recorded")).not.toBeInTheDocument();
-    const rawOutputToggles = screen.getAllByText("原始输出").map((item) => item.closest("details") as HTMLDetailsElement);
-    expect(rawOutputToggles.length).toBeGreaterThan(0);
-    rawOutputToggles.forEach((details) => expect(details.open).toBe(false));
+    expect(screen.queryByText("原始输出")).not.toBeInTheDocument();
     screen.getAllByText(/工具调用 \d+/).forEach((item) => {
       expect((item.closest("details") as HTMLDetailsElement).open).toBe(false);
     });
@@ -506,6 +539,332 @@ describe("AgentsPage", () => {
         approval_epoch: 3,
       });
     });
+  });
+
+  it("shows a bottom approval prompt and submits yes or no with the approval CAS payload", async () => {
+    const fetchMock = mockAgentFetch();
+    const { rerender } = render(<AgentsPage projectId={7} />);
+
+    fireEvent.change(screen.getByLabelText("Agent 目标描述"), { target: { value: "生成登录测试计划" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送 Agent Run" }));
+
+    const approvalPrompt = await screen.findByRole("group", { name: "工具调用审批" });
+    expect(within(approvalPrompt).getByText("是否批准本次工具调用？")).toBeInTheDocument();
+    expect(within(approvalPrompt).getByText(/scenario\.compose/)).toBeInTheDocument();
+    expect(within(approvalPrompt).queryByText(/approval-1|tool-1|input-hash|scope-hash|lineage-1|snap-1/)).not.toBeInTheDocument();
+
+    fireEvent.click(within(approvalPrompt).getByRole("button", { name: "是，批准工具调用" }));
+
+    await waitFor(() => {
+      const approveCall = fetchMock.mock.calls.find((call) => String(call[0]).includes("/agents/tool-calls/tool-1/approve"));
+      expect(approveCall).toBeTruthy();
+      expect(JSON.parse(String(approveCall?.[1]?.body))).toEqual({
+        input_hash: "input-hash",
+        runtime_snapshot_id: "snap-1",
+        resource_scope_hash: "scope-hash",
+        approval_lineage_id: "lineage-1",
+        approval_epoch: 3,
+      });
+    });
+    await waitFor(() => expect(fetchMock.mock.calls.some((call) => String(call[0]).includes("/agents/runs/run-1/resume"))).toBe(true));
+
+    fetchMock.mockClear();
+    rerender(<AgentsPage projectId={7} />);
+    fireEvent.change(screen.getByLabelText("Agent 目标描述"), { target: { value: "生成登录测试计划" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送 Agent Run" }));
+
+    const nextApprovalPrompt = await screen.findByRole("group", { name: "工具调用审批" });
+    fireEvent.click(within(nextApprovalPrompt).getByRole("button", { name: "否，拒绝工具调用" }));
+
+    await waitFor(() => {
+      const rejectCall = fetchMock.mock.calls.find((call) => String(call[0]).includes("/agents/tool-calls/tool-1/reject"));
+      expect(rejectCall).toBeTruthy();
+      expect(JSON.parse(String(rejectCall?.[1]?.body))).toEqual({
+        input_hash: "input-hash",
+        runtime_snapshot_id: "snap-1",
+        resource_scope_hash: "scope-hash",
+        approval_lineage_id: "lineage-1",
+        approval_epoch: 3,
+        reason: "user_rejected_from_agent_bottom_prompt",
+      });
+    });
+  });
+
+  it("keeps a pending bottom approval prompt when a later run snapshot omits approvals", async () => {
+    let runFetchCount = 0;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.includes("/agents/dashboard")) return jsonResponse({ readiness: "attention", checks: [] });
+      if (url.includes("/agents/metrics")) return jsonResponse({});
+      if (url.includes("/agents/alerts")) return jsonResponse({ items: [] });
+      if (url.includes("/agents/release-gates/promotion")) return jsonResponse({ gate_id: "promotion", status: "attention" });
+      if (url.includes("/agents/release-gates")) return jsonResponse({ items: [] });
+      if (url.endsWith("/agents/runs") && init?.method === "POST") {
+        return jsonResponse({ run_id: "run-approval-flash", conversation_id: "agent-conv-approval-flash", status: "queued", runtime_snapshot_id: "snap-flash" });
+      }
+      if (url.includes("/agents/runs/run-approval-flash/events")) {
+        return delayedSseStreamResponse([
+          "id: 9\nevent: run.updated\ndata: {\"run_id\":\"run-approval-flash\"}\n\n",
+        ]);
+      }
+      if (url.includes("/agents/runs/run-approval-flash")) {
+        runFetchCount += 1;
+        return jsonResponse({
+          run_id: "run-approval-flash",
+          project_id: 7,
+          conversation_id: "agent-conv-approval-flash",
+          intent: "保存测试用例",
+          status: "needs_human",
+          current_iteration: 1,
+          current_step_index: 1,
+          max_iterations: 5,
+          auto_complete: false,
+          runtime_snapshot_id: "snap-flash",
+          last_event_sequence: 9,
+          migration_block_count: 0,
+          events: [{ event_seq: 8, event_type: "approval.requested", payload_json: { tool_call_id: "tool-flash" } }],
+          tool_calls: [{
+            tool_call_id: "tool-flash",
+            tool_name: "testcase.batch_update_assertions",
+            status: "planned",
+            required_permissions_json: ["case:manage"],
+            input_json_redacted: { items: [{ test_case_id: 7 }] },
+          }],
+          approvals: runFetchCount === 1 ? [{
+            approval_id: "approval-flash",
+            tool_call_id: "tool-flash",
+            status: "pending",
+            input_hash: "input-flash",
+            runtime_snapshot_id: "snap-flash",
+            resource_scope_hash: "scope-flash",
+            approval_lineage_id: "lineage-flash",
+            approval_epoch: 1,
+          }] : [],
+          migration_blocks: [],
+          context_builds: [],
+          loop_observations: [],
+        });
+      }
+      return jsonResponse({});
+    });
+
+    const { container } = render(<AgentsPage projectId={7} />);
+
+    fireEvent.change(screen.getByLabelText("Agent 目标描述"), { target: { value: "保存测试用例" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送 Agent Run" }));
+
+    const approvalPrompt = await screen.findByRole("group", { name: "工具调用审批" });
+    expect(within(approvalPrompt).getByText("是否批准本次工具调用？")).toBeInTheDocument();
+
+    await waitFor(() => expect(runFetchCount).toBeGreaterThanOrEqual(2));
+    expect(screen.getByRole("group", { name: "工具调用审批" })).toBeInTheDocument();
+  });
+
+  it("replaces stale pending approval cards when governance refresh returns an approved approval", async () => {
+    let runFetchCount = 0;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.includes("/agents/dashboard")) return jsonResponse({ readiness: "attention", checks: [] });
+      if (url.includes("/agents/metrics")) return jsonResponse({});
+      if (url.includes("/agents/alerts")) return jsonResponse({ items: [] });
+      if (url.includes("/agents/release-gates/promotion")) return jsonResponse({ gate_id: "promotion", status: "attention" });
+      if (url.includes("/agents/release-gates")) return jsonResponse({ items: [] });
+      if (url.endsWith("/agents/runs") && init?.method === "POST") {
+        return jsonResponse({ run_id: "run-approved-refresh", conversation_id: "agent-conv-approved-refresh", status: "queued", runtime_snapshot_id: "snap-approved" });
+      }
+      if (url.includes("/agents/runs/run-approved-refresh/events")) {
+        return delayedSseStreamResponse([
+          "id: 10\nevent: approval.approved\ndata: {\"approval_id\":\"approval-approved\",\"tool_call_id\":\"tool-approved\"}\n\n",
+        ]);
+      }
+      if (url.includes("/agents/runs/run-approved-refresh/approvals")) {
+        return jsonResponse({
+          items: [{
+            approval_id: "approval-approved",
+            tool_call_id: "tool-approved",
+            status: "approved",
+            input_hash: "input-approved",
+            runtime_snapshot_id: "snap-approved",
+            resource_scope_hash: "scope-approved",
+            approval_lineage_id: "lineage-approved",
+            approval_epoch: 1,
+          }],
+        });
+      }
+      if (url.includes("/agents/runs/run-approved-refresh")) {
+        runFetchCount += 1;
+        return jsonResponse({
+          run_id: "run-approved-refresh",
+          project_id: 7,
+          conversation_id: "agent-conv-approved-refresh",
+          intent: "保存测试用例断言",
+          status: "needs_human",
+          current_iteration: 1,
+          current_step_index: 1,
+          max_iterations: 5,
+          auto_complete: false,
+          runtime_snapshot_id: "snap-approved",
+          last_event_sequence: 10,
+          migration_block_count: 0,
+          events: [{ event_seq: 8, event_type: "approval.created", payload_json: { tool_call_id: "tool-approved" } }],
+          tool_calls: [{
+            tool_call_id: "tool-approved",
+            tool_name: "testcase.batch_update_assertions",
+            status: "planned",
+            required_permissions_json: ["case:manage"],
+            input_json_redacted: { items: [{ test_case_id: 7 }] },
+          }],
+          approvals: runFetchCount === 1 ? [{
+            approval_id: "approval-approved",
+            tool_call_id: "tool-approved",
+            status: "pending",
+            input_hash: "input-approved",
+            runtime_snapshot_id: "snap-approved",
+            resource_scope_hash: "scope-approved",
+            approval_lineage_id: "lineage-approved",
+            approval_epoch: 1,
+          }] : [],
+          migration_blocks: [],
+          context_builds: [],
+          loop_observations: [],
+        });
+      }
+      return jsonResponse({});
+    });
+
+    const { container } = render(<AgentsPage projectId={7} />);
+
+    fireEvent.change(screen.getByLabelText("Agent 目标描述"), { target: { value: "保存测试用例断言" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送 Agent Run" }));
+
+    expect(await screen.findByRole("group", { name: "工具调用审批" })).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole("group", { name: "工具调用审批" })).not.toBeInTheDocument());
+  });
+
+  it("removes the approval prompt after approve resume observes a failed tool result", async () => {
+    let approved = false;
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.includes("/agents/dashboard")) return jsonResponse({ readiness: "attention", checks: [] });
+      if (url.includes("/agents/metrics")) return jsonResponse({});
+      if (url.includes("/agents/alerts")) return jsonResponse({ items: [] });
+      if (url.includes("/agents/release-gates/promotion")) return jsonResponse({ gate_id: "promotion", status: "attention" });
+      if (url.includes("/agents/release-gates")) return jsonResponse({ items: [] });
+      if (url.endsWith("/agents/runs") && init?.method === "POST") {
+        return jsonResponse({ run_id: "run-observed-failed", conversation_id: "agent-conv-observed-failed", status: "queued", runtime_snapshot_id: "snap-observed" });
+      }
+      if (url.includes("/agents/runs/run-observed-failed/events")) return emptyStreamResponse();
+      if (url.includes("/agents/tool-calls/tool-observed-failed/approve") && init?.method === "POST") {
+        approved = true;
+        return jsonResponse({
+          approval: {
+            approval_id: "approval-observed-failed",
+            tool_call_id: "tool-observed-failed",
+            approval_status: "approved",
+            approval_epoch: 1,
+          },
+          tool_call: {
+            tool_call_id: "tool-observed-failed",
+            tool_name: "testcase.batch_update_assertions",
+            status: "planned",
+          },
+        });
+      }
+      if (url.includes("/agents/runs/run-observed-failed/resume") && init?.method === "POST") {
+        return jsonResponse({
+          run: {
+            run_id: "run-observed-failed",
+            project_id: 7,
+            conversation_id: "agent-conv-observed-failed",
+            intent: "淇濆瓨娴嬭瘯鐢ㄤ緥鏂█",
+            status: "completed",
+            current_iteration: 1,
+            current_step_index: 1,
+            max_iterations: 5,
+            auto_complete: false,
+            runtime_snapshot_id: "snap-observed",
+            last_event_sequence: 12,
+            migration_block_count: 0,
+            blocking_tool_call_ids_json: [],
+            events: [{ event_seq: 12, event_type: "tool.result_observed", payload_json: { tool_call_id: "tool-observed-failed", status: "failed" } }],
+            tool_calls: [{
+              tool_call_id: "tool-observed-failed",
+              tool_name: "testcase.batch_update_assertions",
+              status: "failed",
+              error_code: "tool_execution_failed",
+              error_message: "404: test case missing",
+            }],
+            approvals: [],
+            migration_blocks: [],
+            context_builds: [],
+            loop_observations: [],
+          },
+          resumed: true,
+          checkpoint_freshness: { result: "fresh", action: "continue_from_checkpoint" },
+          scheduled_tool_call_ids: [],
+          executed_tool_call_ids: [],
+          observed_tool_call_ids: ["tool-observed-failed"],
+        });
+      }
+      if (url.includes("/agents/runs/run-observed-failed/actions")) return jsonResponse({ actions: [], primary_action_ids: [], blocked_reasons: [], generated_at: "2026-07-02T00:00:00Z" });
+      if (url.includes("/agents/runs/run-observed-failed/runbook")) return jsonResponse({ run_id: "run-observed-failed", recommendations: [] });
+      if (url.includes("/agents/runs/run-observed-failed")) {
+        return jsonResponse({
+          run_id: "run-observed-failed",
+          project_id: 7,
+          conversation_id: "agent-conv-observed-failed",
+          intent: "淇濆瓨娴嬭瘯鐢ㄤ緥鏂█",
+          status: approved ? "completed" : "needs_human",
+          current_iteration: 1,
+          current_step_index: 1,
+          max_iterations: 5,
+          auto_complete: false,
+          runtime_snapshot_id: "snap-observed",
+          last_event_sequence: approved ? 12 : 8,
+          migration_block_count: 0,
+          blocking_tool_call_ids_json: approved ? [] : ["tool-observed-failed"],
+          events: [],
+          tool_calls: [{
+            tool_call_id: "tool-observed-failed",
+            tool_name: "testcase.batch_update_assertions",
+            status: approved ? "failed" : "planned",
+            error_code: approved ? "tool_execution_failed" : undefined,
+            error_message: approved ? "404: test case missing" : undefined,
+            required_permissions_json: ["case:manage"],
+            input_json_redacted: { items: [{ test_case_id: 7 }] },
+          }],
+          approvals: approved ? [] : [{
+            approval_id: "approval-observed-failed",
+            tool_call_id: "tool-observed-failed",
+            approval_status: "pending",
+            input_hash: "input-observed",
+            runtime_snapshot_id: "snap-observed",
+            resource_scope_hash: "scope-observed",
+            approval_lineage_id: "lineage-observed",
+            approval_epoch: 1,
+          }],
+          migration_blocks: [],
+          context_builds: [],
+          loop_observations: [],
+        });
+      }
+      return jsonResponse({});
+    });
+
+    const { container } = render(<AgentsPage projectId={7} />);
+
+    fireEvent.change(screen.getByLabelText("Agent 目标描述"), { target: { value: "淇濆瓨娴嬭瘯鐢ㄤ緥鏂█" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送 Agent Run" }));
+
+    const approvalPrompt = await screen.findByRole("group", { name: "工具调用审批" });
+    const buttons = within(approvalPrompt).getAllByRole("button");
+    fireEvent.click(buttons[1]);
+
+    await waitFor(() => {
+      expect(screen.queryByRole("group", { name: "工具调用审批" })).not.toBeInTheDocument();
+    });
+    expect(fetchMock.mock.calls.some((call) => String(call[0]).includes("/agents/runs/run-observed-failed/resume"))).toBe(true);
+    expect(container.querySelector(".agent-rail-section strong")).toHaveTextContent("已完成");
   });
 
   it("sends with Enter, clears the composer, and shows thinking while waiting", async () => {
@@ -616,12 +975,14 @@ describe("AgentsPage", () => {
     expect(createBodies[1].conversation_id).toBe(firstBody.conversation_id);
     expect(createBodies[1].conversation_id).not.toBe("agent-conv-backend-1");
     expect(document.querySelectorAll(".agent-history-item")).toHaveLength(1);
-    const history = JSON.parse(localStorage.getItem("agent_conversation_history_7") ?? "[]");
-    expect(history).toHaveLength(1);
-    expect(history[0]).toMatchObject({
-      conversationId: firstBody.conversation_id,
-      runId: "run-rekey-2",
-      intent: "第二个问题",
+    await waitFor(() => {
+      const history = JSON.parse(localStorage.getItem("agent_conversation_history_7") ?? "[]");
+      expect(history).toHaveLength(1);
+      expect(history[0]).toMatchObject({
+        conversationId: firstBody.conversation_id,
+        runId: "run-rekey-2",
+        intent: "第二个问题",
+      });
     });
   });
 
@@ -720,7 +1081,13 @@ describe("AgentsPage", () => {
           approvals: [],
           migration_blocks: [],
           context_builds: [],
-          loop_observations: [],
+          loop_observations: [{
+            observation_id: "loop-audit-hidden",
+            root_cause: "循环观察",
+            stop_reason: "repair_prompt_required",
+            mitigation: "不要在主线程展示",
+            causal_chain_json: ["model_output_invalid", "tool_request_schema_violation", "repair_prompt_required"],
+          }],
         });
       }
       return jsonResponse({});
@@ -1051,10 +1418,202 @@ describe("AgentsPage", () => {
     expect(screen.queryByText(/现在调用组合工具/)).not.toBeInTheDocument();
     expect(screen.queryByText("model.tool_request_detected")).not.toBeInTheDocument();
     expect(screen.queryByText("model.tool_request_stream_suppressed")).not.toBeInTheDocument();
-    expect(screen.getByText("上下文历史已压缩")).toBeInTheDocument();
+    expect(screen.queryByText("上下文历史已压缩")).not.toBeInTheDocument();
     expect(screen.queryByText("context.history_compacted")).not.toBeInTheDocument();
     expect(screen.queryByText("tool.planned")).not.toBeInTheDocument();
     expect(screen.queryByText("tool.running")).not.toBeInTheDocument();
+  });
+
+  it("does not render approval-followup tool request JSON as an Agent reply", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.includes("/agents/dashboard")) return jsonResponse({ readiness: "pass", checks: [] });
+      if (url.includes("/agents/metrics")) return jsonResponse({});
+      if (url.includes("/agents/alerts")) return jsonResponse({ alerts: [], summary: {} });
+      if (url.includes("/agents/release-gates/promotion")) return jsonResponse({ target_level: "L3", decision: "pass" });
+      if (url.includes("/agents/release-gates")) return jsonResponse({ current_level: "L2", status: "pass", checks: [] });
+      if (url.endsWith("/agents/runs") && init?.method === "POST") {
+        return jsonResponse({ run_id: "run-tool-json-hidden", conversation_id: "agent-conv-tool-json-hidden", status: "queued", runtime_snapshot_id: "snap-tool-json-hidden" });
+      }
+      if (url.includes("/agents/runs/run-tool-json-hidden/events")) return emptyStreamResponse();
+      if (url.includes("/agents/runs/run-tool-json-hidden")) {
+        return jsonResponse({
+          run_id: "run-tool-json-hidden",
+          project_id: 7,
+          conversation_id: "agent-conv-tool-json-hidden",
+          intent: "按查询结果更新断言",
+          status: "running",
+          current_iteration: 3,
+          current_step_index: 0,
+          max_iterations: 8,
+          auto_complete: false,
+          runtime_snapshot_id: "snap-tool-json-hidden",
+          last_event_sequence: 5,
+          migration_block_count: 0,
+          events: [
+            { event_seq: 1, event_type: "model.completed", payload_json: { content: "{\"tool_name\":\"testcase.batch_update_assertions\",\"input\":{\"project_id\":7,\"items\":[{\"test_case_id\":999,\"assertions\":[]}]}}", requested_tool: true } },
+            { event_seq: 2, event_type: "tool.running", payload_json: { tool_call_id: "tool-assertions", tool_name: "testcase.batch_update_assertions" } },
+            { event_seq: 3, event_type: "tool.result_observed", payload_json: { tool_call_id: "tool-assertions", tool_name: "testcase.batch_update_assertions" } },
+            { event_seq: 4, event_type: "model.delta", payload_json: { content: "{\"tool_name\":\"testcase.query_project_cases\",\"input\":{\"project_id\":7},\"reason\":\"need returned ids\"}" } },
+            { event_seq: 5, event_type: "model.tool_request_detected", payload_json: { tool_name: "testcase.query_project_cases" } },
+          ],
+          tool_calls: [{
+            tool_call_id: "tool-assertions",
+            tool_name: "testcase.batch_update_assertions",
+            status: "succeeded",
+            input_json_redacted: { project_id: 7, items: [{ test_case_id: 204, assertions: [] }] },
+          }],
+          approvals: [],
+          migration_blocks: [],
+          context_builds: [],
+          loop_observations: [],
+        });
+      }
+      return jsonResponse({});
+    });
+
+    const { container } = render(<AgentsPage projectId={7} />);
+    const composer = screen.getByLabelText("Agent 目标描述") as HTMLTextAreaElement;
+    fireEvent.change(composer, { target: { value: "按查询结果更新断言" } });
+    fireEvent.keyDown(composer, { key: "Enter", code: "Enter" });
+
+    expect(await screen.findByText("工具调用 1")).toBeInTheDocument();
+    expect(container.querySelector(".agent-tool-activity-copy strong")).toHaveTextContent(
+      "已完成工具调用 · testcase.batch_update_assertions",
+    );
+    expect(screen.queryByText(/"tool_name"/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/testcase\.query_project_cases/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/999/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Agent 回复/)).not.toBeInTheDocument();
+  });
+
+  it("keeps loop audit events and backend identifiers out of the user thread", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.includes("/agents/dashboard")) return jsonResponse({ readiness: "pass", checks: [] });
+      if (url.includes("/agents/metrics")) return jsonResponse({});
+      if (url.includes("/agents/alerts")) return jsonResponse({ items: [] });
+      if (url.includes("/agents/release-gates/promotion")) return jsonResponse({ gate_id: "promotion", status: "pass" });
+      if (url.includes("/agents/release-gates")) return jsonResponse({ items: [] });
+      if (url.endsWith("/agents/runs") && init?.method === "POST") {
+        return jsonResponse({ run_id: "run-audit-hidden", conversation_id: "agent-conv-audit-hidden", status: "queued", runtime_snapshot_id: "snap-audit-hidden" });
+      }
+      if (url.includes("/agents/runs/run-audit-hidden/events")) return emptyStreamResponse();
+      if (url.includes("/agents/runs/run-audit-hidden")) {
+        return jsonResponse({
+          run_id: "run-audit-hidden",
+          project_id: 7,
+          conversation_id: "agent-conv-audit-hidden",
+          intent: "查询测试用例",
+          status: "completed",
+          current_iteration: 1,
+          current_step_index: 0,
+          max_iterations: 3,
+          auto_complete: false,
+          runtime_snapshot_id: "snap-audit-hidden",
+          last_event_sequence: 7,
+          migration_block_count: 0,
+          events: [
+            { event_seq: 1, event_type: "model.delta", payload_json: { content: "已找到 3 条测试用例。" } },
+            { event_seq: 2, event_type: "tool.effect_committed", payload_json: { tool_call_id: "tool-audit", project_id: 7, item_id: "agent-event://run-audit-hidden/2" } },
+            { event_seq: 3, event_type: "tool.result_observed", payload_json: { tool_call_id: "tool-audit", context_build_id: "ctx-secret" } },
+            { event_seq: 4, event_type: "context.decision_context_bound", payload_json: { event_seq: 4, project_id: 7, context_build_id: "ctx-secret", item_id: "agent-event://run-audit-hidden/4" } },
+            { event_seq: 5, event_type: "loop.observed", payload_json: { loop_step: "tool_execution", item_id: "agent-loop://hidden" } },
+            { event_seq: 6, event_type: "memory.usage_recorded", payload_json: { project_id: 7, item_id: "agent-memory://hidden" } },
+            { event_seq: 7, event_type: "model.completed", payload_json: { content: "已找到 3 条测试用例。" } },
+          ],
+          tool_calls: [{
+            tool_call_id: "tool-audit",
+            tool_name: "testcase.query_project_cases",
+            status: "succeeded",
+            output_json_redacted: { total: 3 },
+          }],
+          approvals: [],
+          migration_blocks: [],
+          context_builds: [],
+          loop_observations: [],
+        });
+      }
+      return jsonResponse({});
+    });
+
+    const { container } = render(<AgentsPage projectId={7} />);
+    const composer = screen.getByLabelText("Agent 目标描述") as HTMLTextAreaElement;
+    fireEvent.change(composer, { target: { value: "查询测试用例" } });
+    fireEvent.keyDown(composer, { key: "Enter", code: "Enter" });
+
+    expect(await screen.findByText("已找到 3 条测试用例。")).toBeInTheDocument();
+    expect(container.querySelector(".agent-tool-activity-copy strong")).toHaveTextContent("已完成工具调用");
+    expect(screen.queryByText("工具效果已提交")).not.toBeInTheDocument();
+    expect(screen.queryByText("工具结果已进入上下文")).not.toBeInTheDocument();
+    expect(screen.queryByText(/上下文事件/)).not.toBeInTheDocument();
+    expect(screen.queryByText("loop.observed")).not.toBeInTheDocument();
+    expect(screen.queryByText("memory.usage_recorded")).not.toBeInTheDocument();
+    expect(screen.queryByText("循环观察")).not.toBeInTheDocument();
+    expect(screen.queryByText("causal_chain")).not.toBeInTheDocument();
+    expect(screen.queryByText("repair_prompt_required")).not.toBeInTheDocument();
+    expect(screen.queryByText("project_id")).not.toBeInTheDocument();
+    expect(screen.queryByText("context_build_id")).not.toBeInTheDocument();
+    expect(screen.queryByText("agent-event://run-audit-hidden/4")).not.toBeInTheDocument();
+    expect(screen.queryByText("agent-loop://hidden")).not.toBeInTheDocument();
+    expect(screen.queryByText("原始输出")).not.toBeInTheDocument();
+  });
+
+  it("shows a user-facing tool call placeholder before tool details are hydrated", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.includes("/agents/dashboard")) return jsonResponse({ readiness: "pass", checks: [] });
+      if (url.includes("/agents/metrics")) return jsonResponse({});
+      if (url.includes("/agents/alerts")) return jsonResponse({ items: [] });
+      if (url.includes("/agents/release-gates/promotion")) return jsonResponse({ gate_id: "promotion", status: "pass" });
+      if (url.includes("/agents/release-gates")) return jsonResponse({ items: [] });
+      if (url.endsWith("/agents/runs") && init?.method === "POST") {
+        return jsonResponse({ run_id: "run-tool-placeholder", conversation_id: "agent-conv-tool-placeholder", status: "queued", runtime_snapshot_id: "snap-tool-placeholder" });
+      }
+      if (url.includes("/agents/runs/run-tool-placeholder/events")) return emptyStreamResponse();
+      if (url.includes("/agents/runs/run-tool-placeholder")) {
+        return jsonResponse({
+          run_id: "run-tool-placeholder",
+          project_id: 7,
+          conversation_id: "agent-conv-tool-placeholder",
+          intent: "先查询用例",
+          status: "running",
+          current_iteration: 1,
+          current_step_index: 0,
+          max_iterations: 3,
+          auto_complete: false,
+          runtime_snapshot_id: "snap-tool-placeholder",
+          last_event_sequence: 3,
+          migration_block_count: 0,
+          events: [
+            { event_seq: 1, event_type: "model.delta", payload_json: { content: "我会先查询项目中的测试用例。" } },
+            { event_seq: 2, event_type: "tool.running", payload_json: { tool_call_id: "tool-pending-detail", tool_name: "testcase.query_project_cases", project_id: 7, item_id: "agent-event://hidden-tool" } },
+            { event_seq: 3, event_type: "context.decision_context_bound", payload_json: { context_build_id: "ctx-hidden", project_id: 7 } },
+          ],
+          tool_calls: [],
+          approvals: [],
+          migration_blocks: [],
+          context_builds: [],
+          loop_observations: [],
+        });
+      }
+      return jsonResponse({});
+    });
+
+    const { container } = render(<AgentsPage projectId={7} />);
+    const composer = screen.getByLabelText("Agent 目标描述") as HTMLTextAreaElement;
+    fireEvent.change(composer, { target: { value: "先查询用例" } });
+    fireEvent.keyDown(composer, { key: "Enter", code: "Enter" });
+
+    expect(await screen.findByText("我会先查询项目中的测试用例。")).toBeInTheDocument();
+    expect(screen.getByText("工具调用 1")).toBeInTheDocument();
+    expect(container.querySelector(".agent-tool-activity-copy strong")).toHaveTextContent("正在运行工具");
+    expect(container.querySelector(".agent-tool-activity-copy strong")).toHaveTextContent("testcase.query_project_cases");
+    expect(screen.queryByText("tool.running")).not.toBeInTheDocument();
+    expect(screen.queryByText("context.decision_context_bound")).not.toBeInTheDocument();
+    expect(screen.queryByText("project_id")).not.toBeInTheDocument();
+    expect(screen.queryByText("agent-event://hidden-tool")).not.toBeInTheDocument();
+    expect(screen.queryByText("原始输出")).not.toBeInTheDocument();
   });
 
   it("keeps static system and dashboard permission messages out of the thread", async () => {

@@ -38,14 +38,19 @@ describe("Agent SSE stream", () => {
   });
 
   it("parses EventStore replay data payloads", () => {
-    const event = parseAgentSseChunk('id: 4\ndata: {"event_type":"tool.completed","event_seq":4,"run_id":"run-1","payload_json":{"tool_call_id":"tool-1"}}\n\n');
+    const event = parseAgentSseChunk('id: 4\ndata: {"item_id":"agent-event://run-1/4","schema_version":"agent_event_v1","event_type":"tool.completed","event_seq":4,"run_id":"run-1","project_id":7,"occurred_at":"2026-07-02T00:00:00Z","payload_json":{"tool_call_id":"tool-1","model_response_item_id":"agent-model-response://run-1/call-1"},"model_response_item_id":"agent-model-response://run-1/call-1"}\n\n');
 
     expect(event).toEqual({
       id: "4",
+      itemId: "agent-event://run-1/4",
+      schemaVersion: "agent_event_v1",
       sequence: 4,
       runId: "run-1",
+      projectId: 7,
       event: "tool.completed",
-      payload: { tool_call_id: "tool-1" },
+      payload: { tool_call_id: "tool-1", model_response_item_id: "agent-model-response://run-1/call-1" },
+      modelResponseItemId: "agent-model-response://run-1/call-1",
+      occurredAt: "2026-07-02T00:00:00Z",
       createdAt: undefined,
     });
   });
@@ -72,9 +77,22 @@ describe("Agent SSE stream", () => {
     const fetchMock = vi.spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(streamResponse([": keepalive\n\n", "event: heartbeat\ndata: {}\n\n"]))
       .mockResolvedValueOnce(jsonResponse({
+        run: { item_id: "agent-run://run-heartbeat", run_id: "run-heartbeat", project_id: 7, status: "running" },
         events: [{ event_seq: 7, event_type: "model.delta", payload_json: { content: "backfill" } }],
+        context_compactions: [{
+          item_id: "agent-context-compaction://run-heartbeat/6",
+          run_id: "run-heartbeat",
+          event_seq: 6,
+          event_type: "context.history_compacted",
+          payload_json: { strategy: "summarize_older_keep_recent" },
+          created_at: "2026-07-02T00:00:00Z",
+        }],
+        after_sequence: 6,
+        event_count: 1,
+        latest_event_sequence: 7,
         next_after_sequence: 7,
         terminal: false,
+        generated_at: "2026-07-02T00:00:01Z",
       }));
 
     const events: string[] = [];
@@ -89,6 +107,12 @@ describe("Agent SSE stream", () => {
       payload: { content: "backfill" },
     }));
     expect(snapshot.nextAfterSequence).toBe(7);
+    expect(snapshot.contextCompactions[0]).toEqual(expect.objectContaining({
+      itemId: "agent-context-compaction://run-heartbeat/6",
+      runId: "run-heartbeat",
+      sequence: 6,
+    }));
+    expect(snapshot.run?.itemId).toBe("agent-run://run-heartbeat");
     expect(String(fetchMock.mock.calls[1][0])).toContain("/agents/runs/run-heartbeat/events/snapshot?after_sequence=6");
   });
 });

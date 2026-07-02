@@ -1,6 +1,6 @@
 import { requestEventStreamWithAuth } from "./client";
 import { requestWithAuth } from "./client";
-import type { AgentRunEvent, AgentRunEventSnapshot } from "../types/agents";
+import type { AgentContextCompaction, AgentRunEvent, AgentRunEventSnapshot, AgentRunSnapshot } from "../types/agents";
 
 type BackendRecord = Record<string, unknown>;
 export interface AgentRunEventStreamResult {
@@ -23,22 +23,90 @@ function optionalNumber(value: unknown) {
 
 function mapEvent(value: unknown): AgentRunEvent {
   const source = asRecord(value);
+  const payload = asRecord(source.payload_json ?? source.payload ?? source.data);
   return {
     id: optionalString(source.id),
+    itemId: optionalString(source.item_id ?? source.itemId),
+    schemaVersion: optionalString(source.schema_version ?? source.schemaVersion),
     sequence: optionalNumber(source.event_seq ?? source.sequence),
     runId: optionalString(source.run_id ?? source.runId),
+    projectId: optionalNumber(source.project_id ?? source.projectId),
     event: String(source.event_type ?? source.event ?? source.type ?? "message"),
-    payload: asRecord(source.payload_json ?? source.payload ?? source.data),
+    payload,
+    modelResponseItemId: optionalString(source.model_response_item_id ?? source.modelResponseItemId ?? payload.model_response_item_id ?? payload.modelResponseItemId),
+    occurredAt: optionalString(source.occurred_at ?? source.occurredAt),
+    createdAt: optionalString(source.created_at ?? source.createdAt),
+  };
+}
+
+function mapSnapshotRun(value: unknown): AgentRunSnapshot | undefined {
+  const source = asRecord(value);
+  const runId = optionalString(source.run_id ?? source.runId);
+  if (!runId) return undefined;
+  const blockingToolCallIds = source.blocking_tool_call_ids_json ?? source.blockingToolCallIds;
+  return {
+    itemId: optionalString(source.item_id ?? source.itemId),
+    runId,
+    projectId: Number(source.project_id ?? source.projectId ?? 0),
+    userId: optionalNumber(source.user_id ?? source.userId),
+    conversationId: optionalString(source.conversation_id ?? source.conversationId),
+    intent: String(source.intent ?? ""),
+    status: String(source.status ?? "queued") as AgentRunSnapshot["status"],
+    currentIteration: Number(source.current_iteration ?? source.currentIteration ?? 0),
+    currentStepIndex: Number(source.current_step_index ?? source.currentStepIndex ?? 0),
+    maxIterations: Number(source.max_iterations ?? source.maxIterations ?? 0),
+    autoComplete: Boolean(source.auto_complete ?? source.autoComplete ?? false),
+    runtimeSnapshotId: optionalString(source.runtime_snapshot_id ?? source.runtimeSnapshotId),
+    lastCheckpointId: optionalNumber(source.last_checkpoint_id ?? source.lastCheckpointId),
+    lastEventSequence: optionalNumber(source.last_event_sequence ?? source.lastEventSequence),
+    migrationBlockCount: Number(source.migration_block_count ?? source.migrationBlockCount ?? 0),
+    blockingToolCallIds: Array.isArray(blockingToolCallIds)
+      ? blockingToolCallIds.map(String)
+      : [],
+    migrationReasonPrimary: optionalString(source.migration_reason_primary ?? source.migrationReasonPrimary),
+    errorCode: optionalString(source.error_code ?? source.errorCode),
+    errorMessage: optionalString(source.error_message ?? source.errorMessage),
+    events: [],
+    toolCalls: [],
+    approvals: [],
+    migrationBlocks: [],
+    contextBuilds: [],
+    loopObservations: [],
+    result: source.result ?? source.result_json,
+    createdAt: optionalString(source.created_at ?? source.createdAt),
+    updatedAt: optionalString(source.updated_at ?? source.updatedAt),
+    startedAt: optionalString(source.started_at ?? source.startedAt),
+    completedAt: optionalString(source.completed_at ?? source.completedAt),
+  };
+}
+
+function mapContextCompaction(value: unknown): AgentContextCompaction {
+  const source = asRecord(value);
+  return {
+    itemId: optionalString(source.item_id ?? source.itemId),
+    runId: optionalString(source.run_id ?? source.runId),
+    sequence: optionalNumber(source.event_seq ?? source.sequence),
+    eventType: optionalString(source.event_type ?? source.eventType ?? source.event),
+    payload: asRecord(source.payload_json ?? source.payload),
     createdAt: optionalString(source.created_at ?? source.createdAt),
   };
 }
 
 function mapEventSnapshot(value: unknown): AgentRunEventSnapshot {
   const source = asRecord(value);
+  const contextCompactions = source.context_compactions ?? source.contextCompactions;
   return {
+    run: mapSnapshotRun(source.run),
     events: Array.isArray(source.events) ? source.events.map(mapEvent) : [],
+    contextCompactions: Array.isArray(contextCompactions)
+      ? contextCompactions.map(mapContextCompaction)
+      : [],
+    afterSequence: optionalNumber(source.after_sequence ?? source.afterSequence),
+    eventCount: optionalNumber(source.event_count ?? source.eventCount),
+    latestEventSequence: optionalNumber(source.latest_event_sequence ?? source.latestEventSequence),
     nextAfterSequence: optionalNumber(source.next_after_sequence ?? source.nextAfterSequence),
     terminal: Boolean(source.terminal ?? false),
+    generatedAt: optionalString(source.generated_at ?? source.generatedAt),
   };
 }
 
@@ -74,6 +142,13 @@ export function parseAgentSseChunk(chunk: string): AgentRunEvent | undefined {
     sequence: id === undefined ? undefined : Number(id),
     event,
     payload: asRecord(recordPayload.payload_json ?? recordPayload.payload ?? recordPayload.data ?? recordPayload),
+    itemId: optionalString(recordPayload.item_id ?? recordPayload.itemId),
+    schemaVersion: optionalString(recordPayload.schema_version ?? recordPayload.schemaVersion),
+    runId: optionalString(recordPayload.run_id ?? recordPayload.runId),
+    projectId: optionalNumber(recordPayload.project_id ?? recordPayload.projectId),
+    modelResponseItemId: optionalString(recordPayload.model_response_item_id ?? recordPayload.modelResponseItemId),
+    occurredAt: optionalString(recordPayload.occurred_at ?? recordPayload.occurredAt),
+    createdAt: optionalString(recordPayload.created_at ?? recordPayload.createdAt),
   };
 }
 

@@ -99,6 +99,30 @@ function formFromPlan(plan: TestPlan): PlanForm {
   };
 }
 
+function padTimeUnit(value: number) {
+  return String(value).padStart(2, "0");
+}
+
+function dailyTimeToCron(value: string) {
+  const [hourRaw, minuteRaw] = value.split(":");
+  const hour = Number(hourRaw);
+  const minute = Number(minuteRaw);
+  if (!Number.isInteger(hour) || !Number.isInteger(minute) || hour < 0 || hour > 23 || minute < 0 || minute > 59) {
+    return "0 2 * * *";
+  }
+  return `${minute} ${hour} * * *`;
+}
+
+function cronToDailyTime(expression: string) {
+  const [minuteRaw, hourRaw, dayOfMonth, month, dayOfWeek] = expression.trim().split(/\s+/);
+  const hour = Number(hourRaw);
+  const minute = Number(minuteRaw);
+  if (dayOfMonth === "*" && month === "*" && dayOfWeek === "*" && Number.isInteger(hour) && Number.isInteger(minute) && hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59) {
+    return `${padTimeUnit(hour)}:${padTimeUnit(minute)}`;
+  }
+  return "02:00";
+}
+
 function triggerLabel(plan: TestPlan) {
   if (plan.triggerType === "cron") return `Cron · ${plan.cronExpression}`;
   if (plan.triggerType === "webhook") return `Webhook · ${plan.webhookEvent}`;
@@ -594,6 +618,8 @@ function PlanEditor({
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
 }) {
   const patch = <K extends keyof PlanForm>(key: K, value: PlanForm[K]) => onChange({ ...form, [key]: value });
+  const cronExecutionTime = cronToDailyTime(form.cronExpression);
+  const patchCronExecutionTime = (value: string) => onChange({ ...form, cronExpression: dailyTimeToCron(value) });
   const toggleEnvironment = (id: number) => patch("environmentIds", form.environmentIds.includes(id) ? form.environmentIds.filter((item) => item !== id) : [...form.environmentIds, id]);
   const toggleTarget = (target: PlanTarget) => patch("targets", form.targets.some((item) => item.id === target.id) ? form.targets.filter((item) => item.id !== target.id) : [...form.targets, target]);
   const moveTarget = (index: number, direction: -1 | 1) => {
@@ -606,8 +632,8 @@ function PlanEditor({
 
   return (
     <div className="modal-backdrop" role="presentation">
-      <form aria-modal="true" className="plan-editor-modal" onSubmit={onSubmit} role="dialog">
-        <div className="modal-head"><div><span className="eyebrow">{mode === "create" ? "创建计划" : "编辑计划"}</span><h3>{mode === "create" ? "新建自动化测试计划" : form.name}</h3><p>配置执行资产、环境、触发方式和失败处理策略。</p><div className="plan-editor-summary"><span><Icon name="cloud" />{form.environmentIds.length} 个环境</span><span><Icon name="playlist_add_check" />{form.targets.length} 个目标</span><span><Icon name="schedule" />{form.triggerType === "manual" ? "手动触发" : form.triggerType === "cron" ? "Cron 定时" : "Webhook"}</span></div></div><button className="icon-btn" onClick={onClose} title="关闭" type="button"><Icon name="close" /></button></div>
+      <form aria-labelledby="plan-editor-title" aria-modal="true" className="plan-editor-modal" onSubmit={onSubmit} role="dialog">
+        <div className="modal-head"><div><span className="eyebrow">{mode === "create" ? "创建计划" : "编辑计划"}</span><h3 id="plan-editor-title">{mode === "create" ? "新建自动化测试计划" : form.name}</h3><p>配置执行资产、环境、触发方式和失败处理策略。</p><div className="plan-editor-summary"><span><Icon name="cloud" />{form.environmentIds.length} 个环境</span><span><Icon name="playlist_add_check" />{form.targets.length} 个目标</span><span><Icon name="schedule" />{form.triggerType === "manual" ? "手动触发" : form.triggerType === "cron" ? "Cron 定时" : "Webhook"}</span></div></div><button className="icon-btn" onClick={onClose} title="关闭" type="button"><Icon name="close" /></button></div>
         <div className="plan-editor-scroll">
         <div className="plan-editor-grid">
           <section className="plan-editor-main">
@@ -621,12 +647,13 @@ function PlanEditor({
           </section>
           <aside className="plan-editor-side">
             <div className="plan-form-section"><div className="plan-section-head"><div><h4>已选执行顺序</h4><small className="plan-section-hint">使用箭头调整执行顺序</small></div><span className="plan-section-count">{form.targets.length} 项</span></div><div className="selected-targets">{form.targets.map((target, index) => <div className="selected-target" key={target.id}><b>{index + 1}</b><span><strong>{target.name}</strong><small>SCENARIO · v{target.scenarioVersion ?? "-"}</small></span><button disabled={index === 0} onClick={() => moveTarget(index, -1)} title="上移" type="button"><Icon name="arrow_upward" /></button><button disabled={index === form.targets.length - 1} onClick={() => moveTarget(index, 1)} title="下移" type="button"><Icon name="arrow_downward" /></button><button className="danger" onClick={() => toggleTarget(target)} title="移除" type="button"><Icon name="close" /></button></div>)}{form.targets.length === 0 && <div className="plan-empty-selection"><Icon name="playlist_add" /><strong>尚未选择执行目标</strong><span>从左侧选择场景，它们会按加入顺序执行</span></div>}</div></div>
-            <div className="plan-form-section"><h4>触发与执行策略</h4><label className="plan-field"><span>触发方式</span><select onChange={(event) => patch("triggerType", event.target.value as PlanTriggerType)} value={form.triggerType}><option value="manual">手动触发</option><option value="cron">Cron 定时</option><option value="webhook">Webhook</option></select></label>{form.triggerType === "cron" && <><label className="plan-field"><span>Cron 表达式</span><input onChange={(event) => patch("cronExpression", event.target.value)} value={form.cronExpression} /></label><label className="plan-field"><span>调度时区</span><input onChange={(event) => patch("scheduleTimezone", event.target.value)} value={form.scheduleTimezone} /></label></>}{form.triggerType === "webhook" && <label className="plan-field"><span>Webhook 事件</span><input onChange={(event) => patch("webhookEvent", event.target.value)} value={form.webhookEvent} /></label>}<div className="plan-form-grid"><label className="plan-field"><span>执行模式</span><select onChange={(event) => patch("executionMode", event.target.value as PlanExecutionMode)} value={form.executionMode}><option value="serial">串行</option><option value="parallel">并行</option></select></label><label className="plan-field"><span>失败策略</span><select onChange={(event) => patch("failurePolicy", event.target.value as PlanFailurePolicy)} value={form.failurePolicy}><option value="stop">失败后停止</option><option value="continue">失败后继续</option></select></label><label className="plan-field"><span>失败重试次数</span><input max="10" min="0" onChange={(event) => patch("retryCount", Number(event.target.value))} type="number" value={form.retryCount} /></label><label className="plan-field"><span>超时分钟数</span><input max="1440" min="1" onChange={(event) => patch("timeoutMinutes", Number(event.target.value))} type="number" value={form.timeoutMinutes} /></label></div><label className="plan-field"><span>通知邮箱</span><input onChange={(event) => patch("notificationText", event.target.value)} placeholder="qa@example.com, owner@example.com" value={form.notificationText} /></label><label className="plan-enable-toggle"><input checked={form.enabled} onChange={(event) => patch("enabled", event.target.checked)} type="checkbox" /><span><strong>保存后启用计划</strong><small>停用计划不会被定时或 Webhook 触发</small></span></label></div>
+            <div className="plan-form-section"><h4>触发与执行策略</h4><label className="plan-field"><span>触发方式</span><select onChange={(event) => patch("triggerType", event.target.value as PlanTriggerType)} value={form.triggerType}><option value="manual">手动触发</option><option value="cron">Cron 定时</option><option value="webhook">Webhook</option></select></label>{form.triggerType === "cron" && <><div className="plan-cron-grid"><label className="plan-field"><span>执行时间</span><input aria-label="执行时间" onChange={(event) => patchCronExecutionTime(event.target.value)} type="time" value={cronExecutionTime} /></label><label className="plan-field"><span>调度时区</span><input onChange={(event) => patch("scheduleTimezone", event.target.value)} value={form.scheduleTimezone} /></label></div><label className="plan-field"><span>Cron 表达式</span><input aria-label="Cron 表达式" onChange={(event) => patch("cronExpression", event.target.value)} value={form.cronExpression} /></label><small className="plan-section-hint">选择时间后生成每天执行的 Cron，表达式仍可手动调整。</small></>}{form.triggerType === "webhook" && <label className="plan-field"><span>Webhook 事件</span><input onChange={(event) => patch("webhookEvent", event.target.value)} value={form.webhookEvent} /></label>}<div className="plan-form-grid"><label className="plan-field"><span>执行模式</span><select onChange={(event) => patch("executionMode", event.target.value as PlanExecutionMode)} value={form.executionMode}><option value="serial">串行</option><option value="parallel">并行</option></select></label><label className="plan-field"><span>失败策略</span><select onChange={(event) => patch("failurePolicy", event.target.value as PlanFailurePolicy)} value={form.failurePolicy}><option value="stop">失败后停止</option><option value="continue">失败后继续</option></select></label><label className="plan-field"><span>失败重试次数</span><input max="10" min="0" onChange={(event) => patch("retryCount", Number(event.target.value))} type="number" value={form.retryCount} /></label><label className="plan-field"><span>超时分钟数</span><input max="1440" min="1" onChange={(event) => patch("timeoutMinutes", Number(event.target.value))} type="number" value={form.timeoutMinutes} /></label></div><label className="plan-field"><span>通知邮箱</span><input onChange={(event) => patch("notificationText", event.target.value)} placeholder="qa@example.com, owner@example.com" value={form.notificationText} /></label><label className="plan-enable-toggle"><input checked={form.enabled} onChange={(event) => patch("enabled", event.target.checked)} type="checkbox" /><span><strong>保存后启用计划</strong><small>停用计划不会被定时或 Webhook 触发</small></span></label></div>
           </aside>
         </div>
         {message && <p className="plan-form-message">{message}</p>}
+        <p className="plan-editor-save-note">保存后可在计划列表中立即执行</p>
         </div>
-        <div className="modal-actions plan-editor-actions"><span>保存后可在计划列表中立即执行</span><button className="btn" onClick={onClose} type="button">取消</button><button className="btn primary" type="submit"><Icon name="save" />{mode === "create" ? "创建计划" : "保存计划"}</button></div>
+        <div className="modal-actions plan-editor-actions"><button className="btn" onClick={onClose} type="button">取消</button><button className="btn primary" type="submit"><Icon name="save" />{mode === "create" ? "创建计划" : "保存计划"}</button></div>
       </form>
     </div>
   );

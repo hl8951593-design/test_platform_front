@@ -2,6 +2,8 @@ import { requestWithAuth } from "./client";
 export { getAgentRunEventSnapshot, subscribeAgentRunEvents } from "./agentStream";
 export type {
   AgentConversationTranscript,
+  AgentCapabilities,
+  AgentConversationExport,
   AgentEventPayload,
   AgentEventType,
   AgentAlert,
@@ -14,6 +16,7 @@ export type {
   AgentDashboardSnapshot,
   AgentEffectSubmissionState,
   AgentLoopObservation,
+  AgentMemoryFeedbackResult,
   AgentMemoryUsageEvent,
   AgentMigrationBlock,
   AgentMetricsSnapshot,
@@ -21,13 +24,18 @@ export type {
   AgentRunCreatePayload,
   AgentRunEvent,
   AgentRunEventSnapshot,
+  AgentRunAction,
+  AgentRunActionState,
   AgentRunFinalSummary,
+  AgentRunReconcileResult,
+  AgentRunResumeResult,
   AgentRunbook,
   AgentRunQueued,
   AgentRunSnapshot,
   AgentRunStatus,
   AgentRunSummary,
   AgentSkill,
+  AgentToolSpec,
   AgentToolCall,
   AgentToolCallStatus,
 } from "../types/agents";
@@ -36,12 +44,17 @@ import type {
   AgentApproval,
   AgentApprovalDecisionPayload,
   AgentBackendEffectCapability,
+  AgentCapabilities,
+  AgentContextCompaction,
+  AgentConversationExport,
+  AgentConversationRead,
   AgentConversationTranscript,
   AgentContextBuild,
   AgentDashboardCheck,
   AgentDashboardSnapshot,
   AgentEffectSubmissionState,
   AgentLoopObservation,
+  AgentMemoryFeedbackResult,
   AgentMemoryUsageEvent,
   AgentMigrationBlock,
   AgentMetricsSnapshot,
@@ -49,12 +62,17 @@ import type {
   AgentRunCreatePayload,
   AgentRunEvent,
   AgentRunFinalSummary,
+  AgentRunReconcileResult,
+  AgentRunAction,
+  AgentRunActionState,
+  AgentRunResumeResult,
   AgentRunbook,
   AgentRunQueued,
   AgentRunSnapshot,
   AgentRunStatus,
   AgentRunSummary,
   AgentSkill,
+  AgentToolSpec,
   AgentToolCall,
   AgentToolCallStatus,
 } from "../types/agents";
@@ -71,6 +89,11 @@ function asArray(value: unknown) {
 
 function asStringArray(value: unknown) {
   return Array.isArray(value) ? value.map((item) => String(item)) : [];
+}
+
+function asItemRecordMap<T>(value: unknown, mapper: (item: unknown) => T): Record<string, T[]> {
+  const source = asRecord(value);
+  return Object.fromEntries(Object.entries(source).map(([key, items]) => [key, asArray(items).map(mapper)]));
 }
 
 function optionalString(value: unknown) {
@@ -121,6 +144,7 @@ function toApprovalDecisionRequest(payload?: AgentApprovalDecisionPayload) {
 function mapQueued(value: unknown): AgentRunQueued {
   const source = asRecord(value);
   return {
+    itemId: optionalString(source.item_id ?? source.itemId),
     runId: String(source.run_id ?? source.runId ?? ""),
     status: String(source.status ?? "queued") as AgentRunStatus,
     runtimeSnapshotId: optionalString(source.runtime_snapshot_id ?? source.runtimeSnapshotId),
@@ -131,6 +155,7 @@ function mapQueued(value: unknown): AgentRunQueued {
 function mapSummary(value: unknown): AgentRunSummary {
   const source = asRecord(value);
   return {
+    itemId: optionalString(source.item_id ?? source.itemId),
     runId: String(source.run_id ?? source.runId ?? ""),
     projectId: Number(source.project_id ?? source.projectId ?? 0),
     conversationId: optionalString(source.conversation_id ?? source.conversationId),
@@ -148,12 +173,30 @@ function mapSummary(value: unknown): AgentRunSummary {
 
 function mapEvent(value: unknown): AgentRunEvent {
   const source = asRecord(value);
+  const payload = asRecord(source.payload_json ?? source.payload ?? source.data);
   return {
     id: optionalString(source.id),
+    itemId: optionalString(source.item_id ?? source.itemId),
+    schemaVersion: optionalString(source.schema_version ?? source.schemaVersion),
     sequence: optionalNumber(source.event_seq ?? source.sequence),
     runId: optionalString(source.run_id ?? source.runId),
+    projectId: optionalNumber(source.project_id ?? source.projectId),
     event: String(source.event_type ?? source.event ?? source.type ?? "message"),
-    payload: asRecord(source.payload_json ?? source.payload ?? source.data),
+    payload,
+    modelResponseItemId: optionalString(source.model_response_item_id ?? source.modelResponseItemId ?? payload.model_response_item_id ?? payload.modelResponseItemId),
+    occurredAt: optionalString(source.occurred_at ?? source.occurredAt),
+    createdAt: optionalString(source.created_at ?? source.createdAt),
+  };
+}
+
+function mapContextCompaction(value: unknown): AgentContextCompaction {
+  const source = asRecord(value);
+  return {
+    itemId: optionalString(source.item_id ?? source.itemId),
+    runId: optionalString(source.run_id ?? source.runId),
+    sequence: optionalNumber(source.event_seq ?? source.sequence),
+    eventType: optionalString(source.event_type ?? source.eventType ?? source.event),
+    payload: asRecord(source.payload_json ?? source.payload),
     createdAt: optionalString(source.created_at ?? source.createdAt),
   };
 }
@@ -161,9 +204,11 @@ function mapEvent(value: unknown): AgentRunEvent {
 function mapApproval(value: unknown): AgentApproval {
   const source = asRecord(value);
   return {
+    itemId: optionalString(source.item_id ?? source.itemId),
     approvalId: String(source.approval_id ?? source.approvalId ?? source.id ?? ""),
     toolCallId: optionalString(source.tool_call_id ?? source.toolCallId),
-    status: String(source.status ?? "pending") as AgentApproval["status"],
+    toolCallItemId: optionalString(source.tool_call_item_id ?? source.toolCallItemId),
+    status: String(source.approval_status ?? source.status ?? "pending") as AgentApproval["status"],
     inputHash: optionalString(source.input_hash ?? source.inputHash),
     runtimeSnapshotId: optionalString(source.runtime_snapshot_id ?? source.runtimeSnapshotId),
     resourceScopeHash: optionalString(source.resource_scope_hash ?? source.resourceScopeHash),
@@ -179,6 +224,7 @@ function mapApproval(value: unknown): AgentApproval {
 function mapToolCall(value: unknown): AgentToolCall {
   const source = asRecord(value);
   return {
+    itemId: optionalString(source.item_id ?? source.itemId),
     toolCallId: String(source.tool_call_id ?? source.toolCallId ?? source.id ?? ""),
     runId: optionalString(source.run_id ?? source.runId),
     stepIndex: optionalNumber(source.step_index ?? source.stepIndex),
@@ -199,7 +245,16 @@ function mapToolCall(value: unknown): AgentToolCall {
     outputJsonRedacted: source.output_json_redacted ?? source.outputJsonRedacted,
     requiredPermissionsJson: source.required_permissions_json ?? source.requiredPermissionsJson,
     currentApproval: source.current_approval ? mapApproval(source.current_approval) : undefined,
-    recentReconcileAttempts: asArray(source.recent_reconcile_attempts ?? source.recentReconcileAttempts),
+    recentReconcileAttempts: asArray(source.recent_reconcile_attempts ?? source.recentReconcileAttempts).map((attempt) => {
+      const record = asRecord(attempt);
+      return { ...record, itemId: optionalString(record.item_id ?? record.itemId) };
+    }),
+    skippedBackoff: source.skipped_backoff_summary || source.skippedBackoff
+      ? {
+        ...asRecord(source.skipped_backoff_summary ?? source.skippedBackoff),
+        itemId: optionalString(asRecord(source.skipped_backoff_summary ?? source.skippedBackoff).item_id ?? asRecord(source.skipped_backoff_summary ?? source.skippedBackoff).itemId),
+      }
+      : undefined,
     evidenceRefs: asArray(source.evidence_refs_json ?? source.evidenceRefs),
     approvalRequired: Boolean(source.approval_required ?? source.approvalRequired ?? false),
     outputSummary: source.output_summary ?? source.outputSummary,
@@ -213,9 +268,11 @@ function mapToolCall(value: unknown): AgentToolCall {
 function mapMigrationBlock(value: unknown): AgentMigrationBlock {
   const source = asRecord(value);
   return {
+    itemId: optionalString(source.item_id ?? source.itemId),
     blockId: String(source.block_id ?? source.blockId ?? source.id ?? ""),
     runId: optionalString(source.run_id ?? source.runId),
     toolCallId: optionalString(source.tool_call_id ?? source.toolCallId),
+    toolCallItemId: optionalString(source.tool_call_item_id ?? source.toolCallItemId),
     status: String(source.status ?? "open") as AgentMigrationBlock["status"],
     blockType: optionalString(source.block_type ?? source.blockType),
     reason: String(source.reason ?? source.message ?? ""),
@@ -230,6 +287,7 @@ function mapMigrationBlock(value: unknown): AgentMigrationBlock {
 function mapContextBuild(value: unknown): AgentContextBuild {
   const source = asRecord(value);
   return {
+    itemId: optionalString(source.item_id ?? source.itemId),
     contextBuildId: String(source.context_build_id ?? source.contextBuildId ?? source.id ?? ""),
     runId: optionalString(source.run_id ?? source.runId),
     status: optionalString(source.status),
@@ -243,6 +301,7 @@ function mapContextBuild(value: unknown): AgentContextBuild {
 function mapLoopObservation(value: unknown): AgentLoopObservation {
   const source = asRecord(value);
   return {
+    itemId: optionalString(source.item_id ?? source.itemId),
     observationId: String(source.observation_id ?? source.observationId ?? source.id ?? ""),
     runId: optionalString(source.run_id ?? source.runId),
     rootCause: optionalString(source.root_cause ?? source.rootCause),
@@ -256,6 +315,7 @@ function mapLoopObservation(value: unknown): AgentLoopObservation {
 function mapMemoryUsage(value: unknown): AgentMemoryUsageEvent {
   const source = asRecord(value);
   return {
+    itemId: optionalString(source.item_id ?? source.itemId),
     usageEventId: String(source.usage_event_id ?? source.usageEventId ?? source.id ?? ""),
     runId: optionalString(source.run_id ?? source.runId),
     memoryKey: optionalString(source.memory_key ?? source.memoryKey),
@@ -268,9 +328,23 @@ function mapMemoryUsage(value: unknown): AgentMemoryUsageEvent {
   };
 }
 
+function mapMemoryFeedbackResult(value: unknown): AgentMemoryFeedbackResult {
+  const source = asRecord(value);
+  return {
+    attempted: Number(source.attempted ?? 0),
+    processed: Number(source.processed ?? 0),
+    skipped: Number(source.skipped ?? 0),
+    contradictionsRecorded: Number(source.contradictions_recorded ?? source.contradictionsRecorded ?? 0),
+    validationsRecorded: Number(source.validations_recorded ?? source.validationsRecorded ?? 0),
+    results: asArray(source.results),
+    raw: source,
+  };
+}
+
 function mapSnapshot(value: unknown): AgentRunSnapshot {
   const source = asRecord(value);
   return {
+    itemId: optionalString(source.item_id ?? source.itemId),
     runId: String(source.run_id ?? source.runId ?? ""),
     projectId: Number(source.project_id ?? source.projectId ?? 0),
     userId: optionalNumber(source.user_id ?? source.userId),
@@ -295,7 +369,7 @@ function mapSnapshot(value: unknown): AgentRunSnapshot {
     migrationBlocks: asArray(source.migration_blocks ?? source.migrationBlocks).map(mapMigrationBlock),
     contextBuilds: asArray(source.context_builds ?? source.contextBuilds).map(mapContextBuild),
     loopObservations: asArray(source.loop_observations ?? source.loopObservations).map(mapLoopObservation),
-    result: source.result,
+    result: source.result_json ?? source.result,
     createdAt: optionalString(source.created_at ?? source.createdAt),
     updatedAt: optionalString(source.updated_at ?? source.updatedAt),
     startedAt: optionalString(source.started_at ?? source.startedAt),
@@ -305,9 +379,11 @@ function mapSnapshot(value: unknown): AgentRunSnapshot {
 
 function mapRunFinalSummary(value: unknown): AgentRunFinalSummary {
   const source = asRecord(value);
+  const run = source.run ? mapSnapshot(source.run) : undefined;
   return {
-    runId: optionalString(source.run_id ?? source.runId),
-    status: optionalString(source.status) as AgentRunStatus | undefined,
+    runId: optionalString(source.run_id ?? source.runId ?? run?.runId),
+    run,
+    status: optionalString(source.status ?? run?.status) as AgentRunStatus | undefined,
     assistantMessage: optionalString(source.assistant_message ?? source.assistantMessage ?? asRecord(source.result).message),
     assistantVisible: source.assistant_visible === undefined && source.assistantVisible === undefined
       ? undefined
@@ -315,34 +391,130 @@ function mapRunFinalSummary(value: unknown): AgentRunFinalSummary {
     modelInvoked: source.model_invoked === undefined && source.modelInvoked === undefined
       ? undefined
       : Boolean(source.model_invoked ?? source.modelInvoked),
+    terminal: source.terminal === undefined && source.terminal === undefined ? undefined : Boolean(source.terminal),
+    canCancel: source.can_cancel === undefined && source.canCancel === undefined ? undefined : Boolean(source.can_cancel ?? source.canCancel),
+    canResume: source.can_resume === undefined && source.canResume === undefined ? undefined : Boolean(source.can_resume ?? source.canResume),
+    pendingApprovalCount: optionalNumber(source.pending_approval_count ?? source.pendingApprovalCount),
+    openMigrationBlockCount: optionalNumber(source.open_migration_block_count ?? source.openMigrationBlockCount),
+    blockingToolCallIds: asStringArray(source.blocking_tool_call_ids ?? source.blockingToolCallIds),
     counts: asRecord(source.counts ?? source.event_counts ?? source.eventCounts),
     result: source.result,
     actions: asArray(source.actions),
   };
 }
 
-function mapAgentSkill(value: unknown): AgentSkill {
+function mapRunAction(value: unknown): AgentRunAction {
   const source = asRecord(value);
   return {
+    actionId: String(source.action_id ?? source.actionId ?? ""),
+    label: String(source.label ?? source.action_id ?? source.actionId ?? ""),
+    method: optionalString(source.method),
+    path: optionalString(source.path),
+    enabled: Boolean(source.enabled ?? false),
+    reason: optionalString(source.reason),
+    severity: optionalString(source.severity),
+    resourceIds: asStringArray(source.resource_ids ?? source.resourceIds),
+    resourceItemIds: asStringArray(source.resource_item_ids ?? source.resourceItemIds),
+    details: asRecord(source.details),
+  };
+}
+
+function mapRunActionState(value: unknown): AgentRunActionState {
+  const source = asRecord(value);
+  return {
+    runSummary: source.run_summary || source.runSummary ? mapRunFinalSummary(source.run_summary ?? source.runSummary) : undefined,
+    actions: asArray(source.actions).map(mapRunAction),
+    primaryActionIds: asStringArray(source.primary_action_ids ?? source.primaryActionIds),
+    blockedReasons: asStringArray(source.blocked_reasons ?? source.blockedReasons),
+    generatedAt: optionalString(source.generated_at ?? source.generatedAt),
+  };
+}
+
+function mapReconcileResult(value: unknown): AgentRunReconcileResult {
+  const source = asRecord(value);
+  return {
+    runId: String(source.run_id ?? source.runId ?? ""),
+    processed: Number(source.processed ?? 0),
+    skippedBackoff: Number(source.skipped_backoff ?? source.skippedBackoff ?? 0),
+    reconciled: Number(source.reconciled ?? 0),
+    stillUncertain: Number(source.still_uncertain ?? source.stillUncertain ?? 0),
+    needsMigration: Number(source.needs_migration ?? source.needsMigration ?? 0),
+    manualIntervention: Number(source.manual_intervention ?? source.manualIntervention ?? 0),
+    toolCallIds: asStringArray(source.tool_call_ids ?? source.toolCallIds),
+    skippedBackoffToolCalls: asArray(source.skipped_backoff_tool_calls ?? source.skippedBackoffToolCalls),
+    raw: source,
+  };
+}
+
+function mapAgentSkill(value: unknown): AgentSkill {
+  const source = asRecord(value);
+  const itemId = optionalString(source.item_id ?? source.itemId);
+  return {
+    ...(itemId ? { itemId } : {}),
     name: String(source.name ?? ""),
     description: String(source.description ?? ""),
   };
 }
 
+function mapToolSpec(value: unknown): AgentToolSpec {
+  const source = asRecord(value);
+  return {
+    itemId: optionalString(source.item_id ?? source.itemId),
+    name: String(source.name ?? ""),
+    version: optionalString(source.version),
+    summary: optionalString(source.summary ?? source.description),
+    sideEffectClass: optionalString(source.side_effect_class ?? source.sideEffectClass),
+    replayPolicy: optionalString(source.replay_policy ?? source.replayPolicy),
+    requiredPermissions: source.required_permissions ?? source.requiredPermissions,
+    inputSchema: source.input_schema ?? source.inputSchema,
+    outputSchema: source.output_schema ?? source.outputSchema,
+    backendContract: source.backend_contract ?? source.backendContract,
+    schemaHash: optionalString(source.schema_hash ?? source.schemaHash),
+    manifestHash: optionalString(source.manifest_hash ?? source.manifestHash),
+  };
+}
+
+function mapCapabilities(value: unknown): AgentCapabilities {
+  const source = asRecord(value);
+  return {
+    tools: asArray(source.tools ?? source.items ?? value).map(mapToolSpec),
+    raw: source,
+  };
+}
+
+function mapConversation(value: unknown): AgentConversationRead | undefined {
+  const source = asRecord(value);
+  const conversationId = optionalString(source.conversation_id ?? source.conversationId);
+  if (!conversationId) return undefined;
+  return {
+    itemId: optionalString(source.item_id ?? source.itemId),
+    conversationId,
+    projectId: optionalNumber(source.project_id ?? source.projectId),
+    title: optionalString(source.title),
+    createdAt: optionalString(source.created_at ?? source.createdAt),
+    updatedAt: optionalString(source.updated_at ?? source.updatedAt),
+  };
+}
+
 function mapConversationTranscript(value: unknown): AgentConversationTranscript {
   const source = asRecord(value);
-  const conversation = asRecord(source.conversation);
+  const conversation = mapConversation(source.conversation);
   return {
-    conversationId: String(source.conversation_id ?? source.conversationId ?? conversation.conversation_id ?? conversation.conversationId ?? ""),
+    conversationId: String(source.conversation_id ?? source.conversationId ?? conversation?.conversationId ?? ""),
+    conversation,
+    contextCompactions: asArray(source.context_compactions ?? source.contextCompactions).map(mapContextCompaction),
+    generatedAt: optionalString(source.generated_at ?? source.generatedAt),
     runs: asArray(source.runs ?? source.turns ?? source.items).map((item) => {
       const record = asRecord(item);
       const snapshot = mapSnapshot(record.run ?? record.snapshot ?? item);
       const assistantMessage = optionalString(record.assistant_message ?? record.assistantMessage);
-      if (!snapshot.events.length && assistantMessage) {
+      const assistantVisible = record.assistant_visible ?? record.assistantVisible;
+      if (!snapshot.events.length && assistantMessage && assistantVisible !== false) {
         return {
           ...snapshot,
           events: [{
-            id: `transcript-summary-${snapshot.runId}`,
+            id: optionalString(record.item_id ?? record.itemId) ?? `transcript-summary-${snapshot.runId}`,
+            itemId: optionalString(record.item_id ?? record.itemId),
             sequence: optionalNumber(record.latest_event_sequence ?? record.latestEventSequence),
             runId: snapshot.runId,
             event: "model.completed",
@@ -356,15 +528,32 @@ function mapConversationTranscript(value: unknown): AgentConversationTranscript 
   };
 }
 
+function mapConversationExport(value: unknown): AgentConversationExport {
+  const source = asRecord(value);
+  return {
+    conversation: mapConversation(source.conversation),
+    turns: asArray(source.turns).map(mapRunFinalSummary),
+    contextCompactions: asArray(source.context_compactions ?? source.contextCompactions).map(mapContextCompaction),
+    eventsByRunId: asItemRecordMap(source.events_by_run_id ?? source.eventsByRunId, mapEvent),
+    toolCallsByRunId: asItemRecordMap(source.tool_calls_by_run_id ?? source.toolCallsByRunId, mapToolCall),
+    approvalsByRunId: asItemRecordMap(source.approvals_by_run_id ?? source.approvalsByRunId, mapApproval),
+    migrationBlocksByRunId: asItemRecordMap(source.migration_blocks_by_run_id ?? source.migrationBlocksByRunId, mapMigrationBlock),
+    exportFormat: optionalString(source.export_format ?? source.exportFormat),
+    generatedAt: optionalString(source.generated_at ?? source.generatedAt),
+    derivedFrom: source.derived_from ?? source.derivedFrom,
+  };
+}
+
 function mapDashboard(value: unknown): AgentDashboardSnapshot {
   const source = asRecord(value);
   const checks = asArray(source.checks).map((item) => {
     const check = asRecord(item);
     return {
-      key: String(check.key ?? ""),
+      itemId: optionalString(check.item_id ?? check.itemId),
+      key: String(check.key ?? check.name ?? ""),
       status: String(check.status ?? "attention") as AgentDashboardCheck["status"],
       severity: optionalString(check.severity) as AgentDashboardCheck["severity"],
-      message: optionalString(check.message),
+      message: optionalString(check.message ?? check.summary),
     };
   });
   return {
@@ -378,48 +567,94 @@ function mapDashboard(value: unknown): AgentDashboardSnapshot {
 
 function mapRunbook(value: unknown): AgentRunbook {
   const source = asRecord(value);
+  const runbooks = asArray(source.runbooks).map((item) => {
+    const runbook = asRecord(item);
+    return {
+      itemId: optionalString(runbook.item_id ?? runbook.itemId),
+      runbookId: optionalString(runbook.runbook_id ?? runbook.runbookId ?? runbook.id),
+      title: optionalString(runbook.title),
+      trigger: optionalString(runbook.trigger),
+      severity: optionalString(runbook.severity),
+      steps: asStringArray(runbook.steps),
+      safeApiActions: asStringArray(runbook.safe_api_actions ?? runbook.safeApiActions),
+    };
+  });
+  const safeActions = asArray(source.safe_actions ?? source.safeActions).map((item) => {
+    const action = asRecord(item);
+    return {
+      itemId: optionalString(action.item_id ?? action.itemId),
+      key: optionalString(action.key),
+      label: optionalString(action.label),
+      action: optionalString(action.action),
+      targetId: optionalString(action.target_id ?? action.targetId),
+      reason: optionalString(action.reason),
+    };
+  });
+  const runbookSafeActions = runbooks.flatMap((runbook) => (runbook.safeApiActions ?? []).map((action) => ({
+    key: `${runbook.runbookId ?? runbook.title ?? "runbook"}:${action}`,
+    label: action,
+    action,
+    reason: runbook.title,
+  })));
   return {
+    itemId: optionalString(source.item_id ?? source.itemId),
     runId: optionalString(source.run_id ?? source.runId),
-    diagnosis: optionalString(source.diagnosis),
+    runStatus: optionalString(source.run_status ?? source.runStatus),
+    diagnosis: optionalString(source.diagnosis ?? source.run_status ?? source.runStatus),
     recommendations: asArray(source.recommendations).map((item) => {
       const recommendation = asRecord(item);
       return {
-        key: optionalString(recommendation.key),
-        label: optionalString(recommendation.label),
+        itemId: optionalString(recommendation.item_id ?? recommendation.itemId),
+        key: optionalString(recommendation.key ?? recommendation.runbook_id ?? recommendation.runbookId),
+        label: optionalString(recommendation.label ?? recommendation.title ?? recommendation.action),
         action: optionalString(recommendation.action),
         severity: optionalString(recommendation.severity),
         reason: optionalString(recommendation.reason),
       };
     }),
-    safeActions: asArray(source.safe_actions ?? source.safeActions).map((item) => {
-      const action = asRecord(item);
-      return {
-        key: optionalString(action.key),
-        label: optionalString(action.label),
-        action: optionalString(action.action),
-        targetId: optionalString(action.target_id ?? action.targetId),
-        reason: optionalString(action.reason),
-      };
-    }),
+    safeActions: safeActions.length ? safeActions : runbookSafeActions,
+    runbooks,
     raw: source,
   };
 }
 
 function mapReleaseGate(value: unknown): AgentReleaseGate {
   const source = asRecord(value);
+  const statusValue = source.status ?? source.decision ?? (
+    source.can_promote === false || source.canPromote === false ? "blocked" : undefined
+  );
+  const gateId = source.gate_id
+    ?? source.gateId
+    ?? source.target_level
+    ?? source.targetLevel
+    ?? source.current_level
+    ?? source.currentLevel;
+  const checks = asArray(source.checks ?? source.blockers).map((item) => {
+    const check = asRecord(item);
+    return {
+      itemId: optionalString(check.item_id ?? check.itemId),
+      key: String(check.key ?? check.name ?? check.gate_id ?? check.gateId ?? ""),
+      status: String(check.status ?? "attention") as AgentDashboardCheck["status"],
+      severity: optionalString(check.severity) as AgentDashboardCheck["severity"],
+      message: optionalString(check.message ?? check.summary ?? check.reason),
+    };
+  });
+  const summary = source.summary !== undefined
+    ? asRecord(source.summary)
+    : {
+      projectId: source.project_id ?? source.projectId,
+      currentLevel: source.current_level ?? source.currentLevel,
+      targetLevel: source.target_level ?? source.targetLevel,
+      canPromote: source.can_promote ?? source.canPromote,
+      decision: source.decision,
+    };
   return {
-    gateId: optionalString(source.gate_id ?? source.gateId),
-    status: optionalString(source.status),
-    checks: asArray(source.checks).map((item) => {
-      const check = asRecord(item);
-      return {
-        key: String(check.key ?? ""),
-        status: String(check.status ?? "attention") as AgentDashboardCheck["status"],
-        severity: optionalString(check.severity) as AgentDashboardCheck["severity"],
-        message: optionalString(check.message),
-      };
-    }),
-    summary: asRecord(source.summary),
+    itemId: optionalString(source.item_id ?? source.itemId),
+    gateId: optionalString(gateId),
+    status: optionalString(statusValue),
+    checks,
+    summary,
+    raw: source,
   };
 }
 
@@ -451,11 +686,28 @@ export async function getAgentRunSummary(runId: string) {
   return mapRunFinalSummary(result);
 }
 
+export async function getAgentRunActions(runId: string) {
+  const result = await requestWithAuth<BackendRecord>(`/agents/runs/${runId}/actions`);
+  return mapRunActionState(result);
+}
+
 export async function getAgentConversationTranscript(projectId: number, conversationId: string) {
   const result = await requestWithAuth<BackendRecord>(
     `/agents/conversations/${encodeURIComponent(conversationId)}/transcript${queryString({ project_id: projectId })}`,
   );
   return mapConversationTranscript(result);
+}
+
+export async function getAgentConversationExport(projectId: number, conversationId: string) {
+  const result = await requestWithAuth<BackendRecord>(
+    `/agents/conversations/${encodeURIComponent(conversationId)}/export${queryString({ project_id: projectId })}`,
+  );
+  return mapConversationExport(result);
+}
+
+export async function getAgentCapabilities() {
+  const result = await requestWithAuth<unknown>("/agents/capabilities");
+  return mapCapabilities(result);
 }
 
 export async function getAgentSkills() {
@@ -470,12 +722,30 @@ export async function cancelAgentRun(runId: string) {
 
 export async function resumeAgentRun(runId: string) {
   const result = await requestWithAuth<BackendRecord>(`/agents/runs/${runId}/resume`, { method: "POST" });
-  return mapSnapshot(result);
+  const source = asRecord(result);
+  if (source.run || source.resumed !== undefined || source.checkpoint_freshness !== undefined || source.checkpointFreshness !== undefined) {
+    return {
+      run: mapSnapshot(source.run),
+      resumed: Boolean(source.resumed ?? false),
+      checkpointFreshness: asRecord(source.checkpoint_freshness ?? source.checkpointFreshness),
+      scheduledToolCallIds: asStringArray(source.scheduled_tool_call_ids ?? source.scheduledToolCallIds),
+      executedToolCallIds: asStringArray(source.executed_tool_call_ids ?? source.executedToolCallIds),
+      observedToolCallIds: asStringArray(source.observed_tool_call_ids ?? source.observedToolCallIds),
+    } satisfies AgentRunResumeResult;
+  }
+  return {
+    run: mapSnapshot(result),
+    resumed: true,
+    checkpointFreshness: {},
+    scheduledToolCallIds: [],
+    executedToolCallIds: [],
+    observedToolCallIds: [],
+  } satisfies AgentRunResumeResult;
 }
 
 export async function reconcileAgentRun(runId: string) {
   const result = await requestWithAuth<BackendRecord>(`/agents/runs/${runId}/reconcile`, { method: "POST" });
-  return mapSnapshot(result);
+  return mapReconcileResult(result);
 }
 
 export async function getAgentToolCall(toolCallId: string) {
@@ -493,7 +763,7 @@ export async function approveAgentToolCall(toolCallId: string, payload?: AgentAp
     method: "POST",
     body: toApprovalDecisionRequest(payload),
   });
-  return mapApproval(result);
+  return mapApproval(asRecord(result).approval ?? result);
 }
 
 export async function rejectAgentToolCall(toolCallId: string, payload?: AgentApprovalDecisionPayload) {
@@ -501,7 +771,7 @@ export async function rejectAgentToolCall(toolCallId: string, payload?: AgentApp
     method: "POST",
     body: toApprovalDecisionRequest(payload),
   });
-  return mapApproval(result);
+  return mapApproval(asRecord(result).approval ?? result);
 }
 
 export async function getAgentMigrationBlocks(runId: string) {
@@ -510,8 +780,11 @@ export async function getAgentMigrationBlocks(runId: string) {
 }
 
 export async function resolveAgentMigrationBlock(runId: string, blockId: string) {
-  const result = await requestWithAuth<BackendRecord>(`/agents/runs/${runId}/migration-blocks/${blockId}/resolve`, { method: "POST" });
-  return mapMigrationBlock(result);
+  const result = await requestWithAuth<BackendRecord>(`/agents/runs/${runId}/migration-blocks/${blockId}/resolve`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+  return mapMigrationBlock(asRecord(result).block ?? result);
 }
 
 export async function getAgentContextBuilds(runId: string) {
@@ -532,9 +805,9 @@ export async function getAgentMemoryUsageEvents(runId: string) {
 export async function sendAgentMemoryFeedback(usageEventId: string, feedback: AgentMemoryUsageEvent["feedback"]) {
   const result = await requestWithAuth<BackendRecord>(`/agents/memory-usage-events/${usageEventId}/feedback`, {
     method: "POST",
-    body: JSON.stringify({ feedback }),
+    body: JSON.stringify({ outcome: feedback }),
   });
-  return mapMemoryUsage(result);
+  return mapMemoryFeedbackResult(result);
 }
 
 export async function getAgentRunbook(runId: string) {
@@ -554,13 +827,17 @@ export async function getAgentMetrics(projectId: number): Promise<AgentMetricsSn
 
 export async function getAgentAlerts(projectId: number) {
   const result = await requestWithAuth<unknown>(`/agents/alerts${queryString({ project_id: projectId })}`);
-  return asArray(asRecord(result).items ?? result).map((item) => {
+  const source = asRecord(result);
+  return asArray(source.alerts ?? source.items ?? result).map((item) => {
     const source = asRecord(item);
     return {
+      itemId: optionalString(source.item_id ?? source.itemId),
       alertId: optionalString(source.alert_id ?? source.alertId ?? source.id),
       severity: optionalString(source.severity) as AgentAlert["severity"],
       status: optionalString(source.status),
-      message: optionalString(source.message),
+      message: optionalString(source.message ?? source.summary ?? source.action),
+      action: optionalString(source.action),
+      details: asRecord(source.details),
       createdAt: optionalString(source.created_at ?? source.createdAt),
     };
   });
@@ -568,7 +845,10 @@ export async function getAgentAlerts(projectId: number) {
 
 export async function getAgentReleaseGates() {
   const result = await requestWithAuth<unknown>("/agents/release-gates");
-  return asArray(asRecord(result).items ?? result).map(mapReleaseGate);
+  const source = asRecord(result);
+  if (Array.isArray(source.items)) return source.items.map(mapReleaseGate);
+  if (Array.isArray(result)) return result.map(mapReleaseGate);
+  return Object.keys(source).length ? [mapReleaseGate(result)] : [];
 }
 
 export async function getAgentReleaseGatePromotion(projectId: number, targetLevel = "L3") {

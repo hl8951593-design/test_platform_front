@@ -201,6 +201,17 @@ describe("PlansPage", () => {
     expect(api.listPlanSchedule).toHaveBeenCalledWith(3);
   });
 
+  it("generates a daily cron expression from the selected execution time", async () => {
+    render(<PlansPage environmentId={1} environments={environments} onAction={vi.fn()} projectId={7} />);
+
+    fireEvent.click(screen.getAllByRole("button", { name: /新建计划/ })[0]);
+    const dialog = screen.getByRole("dialog");
+    fireEvent.change(within(dialog).getByLabelText("触发方式"), { target: { value: "cron" } });
+    fireEvent.change(within(dialog).getByLabelText("执行时间"), { target: { value: "09:30" } });
+
+    expect(within(dialog).getByLabelText("Cron 表达式")).toHaveValue("30 9 * * *");
+  });
+
   it("uses the app confirmation dialog before deleting a plan", async () => {
     const plan = {
       id: "PLAN-DELETE",

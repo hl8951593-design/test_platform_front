@@ -11,8 +11,29 @@ export type AgentRunStatus =
 export type AgentConnectionState = "idle" | "connecting" | "streaming" | "reconnecting" | "closed" | "error";
 
 export interface AgentSkill {
+  itemId?: string;
   name: string;
   description: string;
+}
+
+export interface AgentToolSpec {
+  itemId?: string;
+  name: string;
+  version?: string;
+  summary?: string;
+  sideEffectClass?: string;
+  replayPolicy?: string;
+  requiredPermissions?: unknown;
+  inputSchema?: unknown;
+  outputSchema?: unknown;
+  backendContract?: unknown;
+  schemaHash?: string;
+  manifestHash?: string;
+}
+
+export interface AgentCapabilities {
+  tools: AgentToolSpec[];
+  raw?: Record<string, unknown>;
 }
 
 export type AgentLoopStep =
@@ -104,6 +125,7 @@ export interface AgentRunCreatePayload {
 }
 
 export interface AgentRunQueued {
+  itemId?: string;
   runId: string;
   status: AgentRunStatus;
   runtimeSnapshotId?: string;
@@ -111,6 +133,7 @@ export interface AgentRunQueued {
 }
 
 export interface AgentRunSummary {
+  itemId?: string;
   runId: string;
   projectId: number;
   conversationId?: string;
@@ -127,20 +150,41 @@ export interface AgentRunSummary {
 
 export interface AgentRunEvent {
   id?: string;
+  itemId?: string;
+  schemaVersion?: string;
   sequence?: number;
   runId?: string;
+  projectId?: number;
   event: AgentEventType | (string & {});
   payload: AgentEventPayload;
+  modelResponseItemId?: string;
+  occurredAt?: string;
+  createdAt?: string;
+}
+
+export interface AgentContextCompaction {
+  itemId?: string;
+  runId?: string;
+  sequence?: number;
+  eventType?: string;
+  payload?: AgentEventPayload;
   createdAt?: string;
 }
 
 export interface AgentRunEventSnapshot {
+  run?: AgentRunSnapshot;
   events: AgentRunEvent[];
+  contextCompactions: AgentContextCompaction[];
+  afterSequence?: number;
+  eventCount?: number;
+  latestEventSequence?: number;
   nextAfterSequence?: number;
   terminal: boolean;
+  generatedAt?: string;
 }
 
 export interface AgentToolCall {
+  itemId?: string;
   toolCallId: string;
   runId?: string;
   stepIndex?: number;
@@ -161,7 +205,8 @@ export interface AgentToolCall {
   outputJsonRedacted?: unknown;
   requiredPermissionsJson?: unknown;
   currentApproval?: AgentApproval;
-  recentReconcileAttempts?: unknown[];
+  recentReconcileAttempts?: Array<unknown & { itemId?: string }>;
+  skippedBackoff?: (Record<string, unknown> & { itemId?: string });
   evidenceRefs?: unknown[];
   approvalRequired?: boolean;
   outputSummary?: unknown;
@@ -172,8 +217,10 @@ export interface AgentToolCall {
 }
 
 export interface AgentApproval {
+  itemId?: string;
   approvalId: string;
   toolCallId?: string;
+  toolCallItemId?: string;
   status: AgentApprovalStatus;
   inputHash?: string;
   runtimeSnapshotId?: string;
@@ -196,9 +243,11 @@ export interface AgentApprovalDecisionPayload {
 }
 
 export interface AgentMigrationBlock {
+  itemId?: string;
   blockId: string;
   runId?: string;
   toolCallId?: string;
+  toolCallItemId?: string;
   status: AgentMigrationBlockStatus;
   blockType?: string;
   reason: string;
@@ -210,6 +259,7 @@ export interface AgentMigrationBlock {
 }
 
 export interface AgentContextBuild {
+  itemId?: string;
   contextBuildId: string;
   runId?: string;
   status?: string;
@@ -220,6 +270,7 @@ export interface AgentContextBuild {
 }
 
 export interface AgentLoopObservation {
+  itemId?: string;
   observationId: string;
   runId?: string;
   rootCause?: string;
@@ -230,6 +281,7 @@ export interface AgentLoopObservation {
 }
 
 export interface AgentMemoryUsageEvent {
+  itemId?: string;
   usageEventId: string;
   runId?: string;
   memoryKey?: string;
@@ -241,10 +293,23 @@ export interface AgentMemoryUsageEvent {
   createdAt?: string;
 }
 
+export interface AgentMemoryFeedbackResult {
+  attempted: number;
+  processed: number;
+  skipped: number;
+  contradictionsRecorded: number;
+  validationsRecorded: number;
+  results: unknown[];
+  raw?: Record<string, unknown>;
+}
+
 export interface AgentRunbook {
+  itemId?: string;
   runId?: string;
+  runStatus?: string;
   diagnosis?: string;
   recommendations?: Array<{
+    itemId?: string;
     key?: string;
     label?: string;
     action?: string;
@@ -252,16 +317,27 @@ export interface AgentRunbook {
     reason?: string;
   }>;
   safeActions?: Array<{
+    itemId?: string;
     key?: string;
     label?: string;
     action?: string;
     targetId?: string;
     reason?: string;
   }>;
+  runbooks?: Array<{
+    itemId?: string;
+    runbookId?: string;
+    title?: string;
+    trigger?: string;
+    severity?: string;
+    steps?: string[];
+    safeApiActions?: string[];
+  }>;
   raw?: Record<string, unknown>;
 }
 
 export interface AgentRunSnapshot {
+  itemId?: string;
   runId: string;
   projectId: number;
   userId?: number;
@@ -295,21 +371,97 @@ export interface AgentRunSnapshot {
 
 export interface AgentRunFinalSummary {
   runId?: string;
+  run?: AgentRunSnapshot;
   status?: AgentRunStatus;
   assistantMessage?: string;
   assistantVisible?: boolean;
   modelInvoked?: boolean;
+  terminal?: boolean;
+  canCancel?: boolean;
+  canResume?: boolean;
+  pendingApprovalCount?: number;
+  openMigrationBlockCount?: number;
+  blockingToolCallIds?: string[];
   counts?: Record<string, unknown>;
   result?: unknown;
   actions?: unknown[];
 }
 
+export interface AgentRunAction {
+  actionId: string;
+  label: string;
+  method?: string;
+  path?: string;
+  enabled: boolean;
+  reason?: string;
+  severity?: string;
+  resourceIds: string[];
+  resourceItemIds: string[];
+  details?: Record<string, unknown>;
+}
+
+export interface AgentRunActionState {
+  runSummary?: AgentRunFinalSummary;
+  actions: AgentRunAction[];
+  primaryActionIds: string[];
+  blockedReasons: string[];
+  generatedAt?: string;
+}
+
+export interface AgentRunResumeResult {
+  run: AgentRunSnapshot;
+  resumed: boolean;
+  checkpointFreshness?: Record<string, unknown>;
+  scheduledToolCallIds: string[];
+  executedToolCallIds: string[];
+  observedToolCallIds: string[];
+}
+
+export interface AgentRunReconcileResult {
+  runId: string;
+  processed: number;
+  skippedBackoff: number;
+  reconciled: number;
+  stillUncertain: number;
+  needsMigration: number;
+  manualIntervention: number;
+  toolCallIds: string[];
+  skippedBackoffToolCalls: unknown[];
+  raw?: Record<string, unknown>;
+}
+
+export interface AgentConversationRead {
+  itemId?: string;
+  conversationId: string;
+  projectId?: number;
+  title?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 export interface AgentConversationTranscript {
   conversationId: string;
+  conversation?: AgentConversationRead;
   runs: AgentRunSnapshot[];
+  contextCompactions: AgentContextCompaction[];
+  generatedAt?: string;
+}
+
+export interface AgentConversationExport {
+  conversation?: AgentConversationRead;
+  turns: AgentRunFinalSummary[];
+  contextCompactions: AgentContextCompaction[];
+  eventsByRunId: Record<string, AgentRunEvent[]>;
+  toolCallsByRunId: Record<string, AgentToolCall[]>;
+  approvalsByRunId: Record<string, AgentApproval[]>;
+  migrationBlocksByRunId: Record<string, AgentMigrationBlock[]>;
+  exportFormat?: string;
+  generatedAt?: string;
+  derivedFrom?: unknown;
 }
 
 export interface AgentDashboardCheck {
+  itemId?: string;
   key: string;
   status: "pass" | "attention" | "blocked";
   severity?: "P0" | "P1" | "P2";
@@ -329,16 +481,21 @@ export interface AgentMetricsSnapshot {
 }
 
 export interface AgentAlert {
+  itemId?: string;
   alertId?: string;
   severity?: "P0" | "P1" | "P2";
   status?: string;
   message?: string;
+  action?: string;
+  details?: Record<string, unknown>;
   createdAt?: string;
 }
 
 export interface AgentReleaseGate {
+  itemId?: string;
   gateId?: string;
   status?: string;
   checks?: AgentDashboardCheck[];
   summary?: Record<string, unknown>;
+  raw?: Record<string, unknown>;
 }

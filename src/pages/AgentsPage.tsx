@@ -13,8 +13,10 @@ import {
   getAgentMigrationBlocks,
   getAgentReleaseGatePromotion,
   getAgentReleaseGates,
+  getAgentConversationExport,
   getAgentConversationTranscript,
   getAgentRun,
+  getAgentRunActions,
   getAgentRunEventSnapshot,
   getAgentRunSummary,
   getAgentRunbook,
@@ -30,12 +32,14 @@ import {
   type AgentConnectionState,
   type AgentContextBuild,
   type AgentDashboardSnapshot,
-  type AgentLoopObservation,
   type AgentMemoryUsageEvent,
   type AgentMigrationBlock,
   type AgentMetricsSnapshot,
   type AgentReleaseGate,
   type AgentRunEvent,
+  type AgentRunAction,
+  type AgentRunActionState,
+  type AgentRunResumeResult,
   type AgentRunbook,
   type AgentRunSummary,
   type AgentRunSnapshot,
@@ -139,6 +143,25 @@ function stringifyValue(value: unknown) {
   if (value === undefined || value === null || value === "") return "-";
   if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return String(value);
   return JSON.stringify(value, null, 2);
+}
+
+function isInternalToolRequestContent(content: string) {
+  const trimmed = content.trim();
+  if (!trimmed) return false;
+  if (/^```(?:agent_tool_request|json)?\s*[\s\S]*"tool_name"\s*:\s*"[^"]+"[\s\S]*```\s*$/.test(trimmed)) return true;
+  return /^\{[\s\S]*"tool_name"\s*:\s*"[^"]+"[\s\S]*\}$/.test(trimmed);
+}
+
+function runActionHint(action: AgentRunAction) {
+  const details = action.details ?? {};
+  const postResolveNextAction = String(details.post_resolve_next_action ?? "");
+  if (
+    action.actionId === "resolve_migration"
+    && (details.run_terminal || details.resolve_preserves_terminal_run || postResolveNextAction === "reconcile_run")
+  ) {
+    return "Resolve the migration block, then continue reconcile. The terminal Run is not resumed.";
+  }
+  return action.reason || "";
 }
 
 function parseMarkdownTableRow(line: string) {
@@ -302,11 +325,13 @@ function parseMarkdownBlocks(markdown: string): MarkdownBlock[] {
 }
 
 function stripInternalToolRequestBlocks(content: string) {
+  if (isInternalToolRequestContent(content)) return "";
   return content
     .replace(/(^|\n)[^\n]*(?:调用|使用)[^\n]*(?:工具|Tool)[^\n]*[:：]\s*```[^\n`]*[\s\S]*?"tool_name"\s*:\s*"[^"]+"[\s\S]*?```/g, "$1")
     .replace(/(^|\n)[^\n]*(?:调用|使用)[^\n]*(?:工具|Tool)[^\n]*[:：]\s*\n```[^\n`]*[\s\S]*?"tool_name"\s*:\s*"[^"]+"[\s\S]*?```/g, "$1")
     .replace(/```[^\n`]*[\s\S]*?"tool_name"\s*:\s*"[^"]+"[\s\S]*?```/g, "")
     .replace(/(^|\n)\s*\{[^\n]*"tool_name"\s*:\s*"[^"]+"[^\n]*\}\s*(?=\n|$)/g, "$1")
+    .replace(/(^|\n)\s*\{[\s\S]*?"tool_name"\s*:\s*"[^"]+"[\s\S]*?\}\s*(?=\n|$)/g, "$1")
     .trim();
 }
 
@@ -402,12 +427,23 @@ function MarkdownContent({ content }: { content: string }) {
 }
 
 function eventKey(event: AgentRunEvent, index: number) {
-  return `${event.sequence ?? event.id ?? index}-${event.event}`;
+  return event.itemId || `${event.sequence ?? event.id ?? index}-${event.event}`;
 }
 
 function eventIdentity(event: AgentRunEvent) {
+  if (event.itemId) return event.itemId;
   const identity = event.sequence ?? event.id;
   return identity === undefined ? undefined : `${identity}-${event.event}`;
+}
+
+function modelResponseKey(event: AgentRunEvent) {
+  const payload = event.payload;
+  const key = event.modelResponseItemId
+    ?? payload.model_response_item_id
+    ?? payload.modelResponseItemId
+    ?? payload.model_call_id
+    ?? payload.modelCallId;
+  return key === undefined || key === null ? undefined : String(key);
 }
 
 function eventText(event: AgentRunEvent) {
@@ -416,11 +452,15 @@ function eventText(event: AgentRunEvent) {
 }
 
 function isAssistantDelta(event: AgentRunEvent) {
-  return event.event === "model.delta";
+  return event.event === "model.delta" && !isInternalToolRequestContent(eventText(event));
 }
 
 function isAssistantFinalContent(event: AgentRunEvent) {
-  return ["model.markdown_normalized", "model.completed"].includes(event.event) && eventText(event).length > 0;
+  return ["model.markdown_normalized", "model.completed"].includes(event.event)
+    && eventText(event).length > 0
+    && event.payload.requested_tool !== true
+    && event.payload.requestedTool !== true
+    && !isInternalToolRequestContent(eventText(event));
 }
 
 function isAssistantRunCompletedContent(event: AgentRunEvent) {
@@ -460,12 +500,19 @@ function mergeAssistantEvent(previous: AgentRunEvent, next: AgentRunEvent): Agen
   };
 }
 
+function shouldMergeAssistantDelta(previous: AgentRunEvent, next: AgentRunEvent) {
+  if (!isAssistantDelta(previous) || !isAssistantDelta(next)) return false;
+  const previousResponseKey = modelResponseKey(previous);
+  const nextResponseKey = modelResponseKey(next);
+  return !previousResponseKey || !nextResponseKey || previousResponseKey === nextResponseKey;
+}
+
 function appendCompactedEvents(current: AgentRunEvent[], incoming: AgentRunEvent[]) {
   if (!incoming.length) return current;
   const nextEvents = [...current];
   incoming.forEach((event) => {
     const previous = nextEvents[nextEvents.length - 1];
-    if (previous && isAssistantDelta(previous) && isAssistantDelta(event)) {
+    if (previous && shouldMergeAssistantDelta(previous, event)) {
       nextEvents[nextEvents.length - 1] = mergeAssistantEvent(previous, event);
       return;
     }
@@ -481,13 +528,55 @@ function isRunLifecycleEvent(event: AgentRunEvent) {
 function isSuppressedRuntimeEvent(event: AgentRunEvent) {
   return event.event === "model.tool_request_detected"
     || event.event.startsWith("model.tool_request_")
-    || event.event.startsWith("model.required_tool_")
-    || ["tool.planned", "tool.running", "tool.completed"].includes(event.event);
+    || event.event.startsWith("model.required_tool_");
+}
+
+function isAuditOnlyRuntimeEvent(event: AgentRunEvent) {
+  return event.event.startsWith("model.")
+    || event.event.startsWith("tool.")
+    || event.event.startsWith("context.")
+    || event.event.startsWith("loop.")
+    || event.event.startsWith("memory.")
+    || event.event.startsWith("approval.")
+    || event.event.startsWith("migration.");
 }
 
 function eventToolCallId(event: AgentRunEvent) {
   const id = event.payload.tool_call_id ?? event.payload.toolCallId ?? event.payload.id;
   return typeof id === "string" ? id : undefined;
+}
+
+function eventToolName(event: AgentRunEvent) {
+  const name = event.payload.tool_name ?? event.payload.toolName ?? event.payload.name;
+  return typeof name === "string" && name.trim() ? name.trim() : "工具调用";
+}
+
+function eventToolStatus(event: AgentRunEvent): AgentToolCall["status"] {
+  if (["tool.completed", "tool.result_observed"].includes(event.event)) return "succeeded";
+  if (event.event === "tool.running") return "running_pre_effect";
+  if (event.event === "tool.transport_sent_observed" || event.event === "tool.backend_accepted" || event.event === "tool.effect_committed") return "effect_sent";
+  return "planned";
+}
+
+function eventToolEffectState(event: AgentRunEvent): AgentToolCall["effectSubmissionState"] {
+  if (event.event === "tool.send_intent_recorded") return "send_intent_recorded";
+  if (event.event === "tool.transport_sent_observed") return "transport_sent_observed";
+  if (event.event === "tool.backend_accepted") return "backend_accepted";
+  if (event.event === "tool.effect_committed" || event.event === "tool.result_observed") return "effect_committed";
+  return "none";
+}
+
+function toolCallFromEvent(event: AgentRunEvent, index: number): AgentToolCall {
+  const toolCallId = eventToolCallId(event) || `event-tool-${event.sequence ?? index}`;
+  return {
+    itemId: event.itemId,
+    toolCallId,
+    toolName: eventToolName(event),
+    status: eventToolStatus(event),
+    effectSubmissionState: eventToolEffectState(event),
+    inputJsonRedacted: undefined,
+    outputSummary: event.event === "tool.result_observed" ? "工具结果已进入模型上下文，等待后续回复" : undefined,
+  };
 }
 
 function eventErrorCode(event: AgentRunEvent) {
@@ -502,6 +591,7 @@ function isStaleWorkerLostEvent(event: AgentRunEvent) {
 function buildAgentTranscriptItems(events: AgentRunEvent[], toolCalls: AgentToolCall[]) {
   const toolCallsById = new Map(toolCalls.map((toolCall) => [toolCall.toolCallId, toolCall]));
   const renderedToolCallIds = new Set<string>();
+  const toolItemIndexById = new Map<string, number>();
   const items: AgentTranscriptItem[] = [];
   let assistantBuffer = "";
   let assistantStartKey = "";
@@ -543,9 +633,6 @@ function buildAgentTranscriptItems(events: AgentRunEvent[], toolCalls: AgentTool
       assistantBuffer = content;
       return;
     }
-    if (isRunLifecycleEvent(event)) return;
-    if (isSuppressedRuntimeEvent(event)) return;
-
     if (isAssistantDelta(event)) {
       if (!assistantBuffer) {
         assistantStartKey = eventKey(event, index);
@@ -573,24 +660,40 @@ function buildAgentTranscriptItems(events: AgentRunEvent[], toolCalls: AgentTool
       return;
     }
 
+    if (isRunLifecycleEvent(event)) return;
+
     flushAssistant();
     if (event.event.startsWith("tool.")) {
       const toolCallId = eventToolCallId(event);
       const toolCall = toolCallId ? toolCallsById.get(toolCallId) : undefined;
-      if (toolCall && !renderedToolCallIds.has(toolCall.toolCallId)) {
-        renderedToolCallIds.add(toolCall.toolCallId);
-        items.push({ type: "tool", key: `tool-${toolCall.toolCallId}`, toolCall, index: renderedToolCallIds.size });
+      const visibleToolCall = toolCall ?? toolCallFromEvent(event, index);
+      const existingItemIndex = toolItemIndexById.get(visibleToolCall.toolCallId);
+      if (existingItemIndex !== undefined) {
+        items[existingItemIndex] = { type: "tool", key: visibleToolCall.itemId || `tool-${visibleToolCall.toolCallId}`, toolCall: visibleToolCall, index: (items[existingItemIndex] as Extract<AgentTranscriptItem, { type: "tool" }>).index };
         return;
       }
+      if (renderedToolCallIds.has(visibleToolCall.toolCallId)) return;
+      renderedToolCallIds.add(visibleToolCall.toolCallId);
+      toolItemIndexById.set(visibleToolCall.toolCallId, items.length);
+      items.push({ type: "tool", key: visibleToolCall.itemId || `tool-${visibleToolCall.toolCallId}`, toolCall: visibleToolCall, index: renderedToolCallIds.size });
+      return;
     }
+    if (isSuppressedRuntimeEvent(event)) return;
+    if (isAuditOnlyRuntimeEvent(event)) return;
     items.push({ type: "event", key: eventKey(event, index), event });
   });
   flushAssistant();
 
   toolCalls.forEach((toolCall) => {
+    const existingItemIndex = toolItemIndexById.get(toolCall.toolCallId);
+    if (existingItemIndex !== undefined) {
+      items[existingItemIndex] = { type: "tool", key: toolCall.itemId || `tool-${toolCall.toolCallId}`, toolCall, index: (items[existingItemIndex] as Extract<AgentTranscriptItem, { type: "tool" }>).index };
+      return;
+    }
     if (renderedToolCallIds.has(toolCall.toolCallId)) return;
     renderedToolCallIds.add(toolCall.toolCallId);
-    items.push({ type: "tool", key: `tool-${toolCall.toolCallId}`, toolCall, index: renderedToolCallIds.size });
+    toolItemIndexById.set(toolCall.toolCallId, items.length);
+    items.push({ type: "tool", key: toolCall.itemId || `tool-${toolCall.toolCallId}`, toolCall, index: renderedToolCallIds.size });
   });
 
   return items;
@@ -602,6 +705,18 @@ function effectiveHistoryStatus(summary: AgentRunSummary, activeRun: AgentRunSna
 
 function historyConversationKey(summary: Pick<AgentRunSummary, "conversationId" | "runId">) {
   return summary.conversationId || summary.runId;
+}
+
+function runIdentity(run: Pick<AgentRunSnapshot, "itemId" | "runId">) {
+  return run.itemId || run.runId;
+}
+
+function toolIdentity(toolCall: Pick<AgentToolCall, "itemId" | "toolCallId">) {
+  return toolCall.itemId || toolCall.toolCallId;
+}
+
+function isResumeResult(value: AgentRunSnapshot | AgentRunResumeResult): value is AgentRunResumeResult {
+  return Boolean(value && typeof value === "object" && "resumed" in value && "run" in value);
 }
 
 function normalizeRunHistory(entries: AgentRunSummary[]) {
@@ -634,16 +749,89 @@ function upsertConversationTurn(turns: AgentRunSnapshot[], snapshot: AgentRunSna
   return next;
 }
 
+function approvalMatches(left: AgentApproval, right: AgentApproval) {
+  return Boolean(
+    (left.approvalId && right.approvalId && left.approvalId === right.approvalId) ||
+    (left.toolCallId && right.toolCallId && left.toolCallId === right.toolCallId),
+  );
+}
+
+function mergeApprovalList(current: AgentApproval[], incoming: AgentApproval[], keepCurrentPendingWhenIncomingEmpty: boolean) {
+  if (!incoming.length) return keepCurrentPendingWhenIncomingEmpty ? current : incoming;
+  const merged = current.map((approval) => incoming.find((item) => approvalMatches(approval, item)) ?? approval);
+  incoming.forEach((approval) => {
+    if (!merged.some((item) => approvalMatches(item, approval))) merged.push(approval);
+  });
+  return merged;
+}
+
 function mergeConversationTurn(current: AgentRunSnapshot, incoming: AgentRunSnapshot) {
   return {
     ...current,
     ...incoming,
     events: current.events.length ? current.events : incoming.events,
     toolCalls: current.toolCalls.length ? current.toolCalls : incoming.toolCalls,
-    approvals: current.approvals.length ? current.approvals : incoming.approvals,
+    approvals: mergeApprovalList(current.approvals, incoming.approvals, current.approvals.length > 0),
     migrationBlocks: current.migrationBlocks.length ? current.migrationBlocks : incoming.migrationBlocks,
     contextBuilds: current.contextBuilds.length ? current.contextBuilds : incoming.contextBuilds,
     loopObservations: current.loopObservations.length ? current.loopObservations : incoming.loopObservations,
+  };
+}
+
+function mergeRunSnapshot(current: AgentRunSnapshot | null, incoming: AgentRunSnapshot) {
+  if (!current || current.runId !== incoming.runId) return incoming;
+  const shouldKeepPendingApprovals =
+    incoming.approvals.length === 0 &&
+    !terminalRunStatuses.includes(incoming.status) &&
+    current.approvals.some((approval) => approval.status === "pending");
+
+  return {
+    ...incoming,
+    conversationId: incoming.conversationId ?? current.conversationId,
+    approvals: mergeApprovalList(current.approvals, incoming.approvals, shouldKeepPendingApprovals),
+  };
+}
+
+function mergeRunPatch(current: AgentRunSnapshot | null, patch: Partial<AgentRunSnapshot>) {
+  if (!current) return current;
+  const shouldKeepPendingApprovals =
+    patch.approvals !== undefined &&
+    patch.approvals.length === 0 &&
+    !terminalRunStatuses.includes(patch.status ?? current.status) &&
+    current.approvals.some((approval) => approval.status === "pending");
+
+  return {
+    ...current,
+    ...patch,
+    approvals: patch.approvals === undefined
+      ? current.approvals
+      : mergeApprovalList(current.approvals, patch.approvals, shouldKeepPendingApprovals),
+  };
+}
+
+function updateApprovalStatus(
+  current: AgentRunSnapshot | null,
+  approval: AgentApproval,
+  status: AgentApproval["status"],
+) {
+  if (!current) return current;
+  return {
+    ...current,
+    approvals: current.approvals.map((item) => {
+      const sameApproval = approval.approvalId && item.approvalId === approval.approvalId;
+      const sameToolCall = approval.toolCallId && item.toolCallId === approval.toolCallId;
+      return sameApproval || sameToolCall ? { ...item, status } : item;
+    }),
+  };
+}
+
+function removeApprovalsForToolCalls(current: AgentRunSnapshot | null, toolCallIds: Array<string | undefined>) {
+  const observedToolCallIds = toolCallIds.filter((toolCallId): toolCallId is string => Boolean(toolCallId));
+  if (!current || !observedToolCallIds.length) return current;
+  const observed = new Set(observedToolCallIds);
+  return {
+    ...current,
+    approvals: current.approvals.filter((approval) => !approval.toolCallId || !observed.has(approval.toolCallId)),
   };
 }
 
@@ -737,7 +925,7 @@ function getCurrentUserIsAdmin() {
 export function AgentsPage({ projectId }: { projectId?: number }) {
   const [conversationId, setConversationId] = useState(() => createLocalConversationId());
   const [prompt, setPrompt] = useState("");
-  const [maxIterations, setMaxIterations] = useState(3);
+  const [maxIterations, setMaxIterations] = useState(8);
   const [autoComplete, setAutoComplete] = useState(false);
   const [activeRunId, setActiveRunId] = useState("");
   const [run, setRun] = useState<AgentRunSnapshot | null>(null);
@@ -748,10 +936,12 @@ export function AgentsPage({ projectId }: { projectId?: number }) {
   const [releaseGates, setReleaseGates] = useState<AgentReleaseGate[]>([]);
   const [promotionGate, setPromotionGate] = useState<AgentReleaseGate | null>(null);
   const [runbook, setRunbook] = useState<AgentRunbook | null>(null);
+  const [runActionState, setRunActionState] = useState<AgentRunActionState | null>(null);
   const [memoryUsage, setMemoryUsage] = useState<AgentMemoryUsageEvent[]>([]);
   const [events, setEvents] = useState<AgentRunEvent[]>([]);
   const [conversationTurns, setConversationTurns] = useState<AgentRunSnapshot[]>([]);
   const [selectedToolCallId, setSelectedToolCallId] = useState("");
+  const [selectedItemId, setSelectedItemId] = useState("");
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>("run");
   const [isInspectorOpen, setIsInspectorOpen] = useState(false);
   const [historySearch, setHistorySearch] = useState("");
@@ -778,13 +968,26 @@ export function AgentsPage({ projectId }: { projectId?: number }) {
 
   const pendingApprovals = useMemo(() => run?.approvals.filter((approval) => approval.status === "pending") ?? [], [run]);
   const openMigrationBlocks = useMemo(() => run?.migrationBlocks.filter((block) => block.status === "open") ?? [], [run]);
+  const bottomApproval = pendingApprovals[0];
+  const bottomApprovalToolCall = useMemo(() => {
+    if (!bottomApproval?.toolCallId || !run) return undefined;
+    return run.toolCalls.find((toolCall) => toolCall.toolCallId === bottomApproval.toolCallId);
+  }, [bottomApproval?.toolCallId, run]);
   const canCreate = Boolean(projectId && prompt.trim() && !isCreating);
-  const canCancel = Boolean(run && !terminalRunStatuses.includes(run.status));
-  const canResume = Boolean(run && ["paused", "needs_human", "migration_blocked"].includes(run.status));
+  const actionById = useMemo(() => new Map(runActionState?.actions.map((action) => [action.actionId, action]) ?? []), [runActionState]);
+  const primaryRunActions = useMemo(() => (
+    runActionState?.primaryActionIds
+      .map((actionId) => actionById.get(actionId))
+      .filter((action): action is AgentRunAction => Boolean(action)) ?? []
+  ), [actionById, runActionState?.primaryActionIds]);
+  const canCancel = Boolean(actionById.get("cancel_run")?.enabled ?? runActionState?.runSummary?.canCancel ?? (run && !terminalRunStatuses.includes(run.status)));
+  const canResume = Boolean(actionById.get("resume_run")?.enabled ?? runActionState?.runSummary?.canResume ?? (run && ["paused", "needs_human", "migration_blocked"].includes(run.status)));
   const activeToolCall = useMemo(() => {
     if (!run?.toolCalls.length) return null;
-    return run.toolCalls.find((toolCall) => toolCall.toolCallId === selectedToolCallId) ?? run.toolCalls[0];
-  }, [run?.toolCalls, selectedToolCallId]);
+    return run.toolCalls.find((toolCall) => (
+      toolCall.toolCallId === selectedToolCallId || toolCall.itemId === selectedItemId
+    )) ?? run.toolCalls[0];
+  }, [run?.toolCalls, selectedItemId, selectedToolCallId]);
   const filteredHistory = useMemo(() => {
     const query = historySearch.trim().toLowerCase();
     return [...runHistory].sort((left, right) => {
@@ -842,8 +1045,10 @@ export function AgentsPage({ projectId }: { projectId?: number }) {
     setConversationTurns([]);
     setPrompt("");
     setRunbook(null);
+    setRunActionState(null);
     setMemoryUsage([]);
     setSelectedToolCallId("");
+    setSelectedItemId("");
     setMessage("");
     setError("");
     setThinkingStartedAt(null);
@@ -877,10 +1082,13 @@ export function AgentsPage({ projectId }: { projectId?: number }) {
     try {
       const snapshot = await getAgentRun(runId);
       const effectiveSnapshot = conversationIdOverride ? { ...snapshot, conversationId: conversationIdOverride } : snapshot;
-      setRun(effectiveSnapshot);
+      setRun((current) => mergeRunSnapshot(current, effectiveSnapshot));
       replaceEvents(snapshot.events);
       if (effectiveSnapshot.conversationId) setConversationId(effectiveSnapshot.conversationId);
-      if (snapshot.toolCalls[0]) setSelectedToolCallId((current) => current || snapshot.toolCalls[0].toolCallId);
+      if (snapshot.toolCalls[0]) {
+        setSelectedToolCallId((current) => current || snapshot.toolCalls[0].toolCallId);
+        setSelectedItemId((current) => current || toolIdentity(snapshot.toolCalls[0]));
+      }
       const latestSequence = snapshot.events.reduce<number | undefined>((last, event) => {
         if (event.sequence === undefined) return last;
         return last === undefined ? event.sequence : Math.max(last, event.sequence);
@@ -900,6 +1108,7 @@ export function AgentsPage({ projectId }: { projectId?: number }) {
           .catch(() => undefined);
       }
       void getAgentRunbook(runId).then(setRunbook).catch(() => setRunbook(null));
+      void getAgentRunActions(runId).then(setRunActionState).catch(() => setRunActionState(null));
       void getAgentMemoryUsageEvents(runId).then(setMemoryUsage).catch(() => setMemoryUsage([]));
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : "Agent Run 加载失败");
@@ -949,14 +1158,24 @@ export function AgentsPage({ projectId }: { projectId?: number }) {
     try {
       const summary = await getAgentRunSummary(runId);
       if (summary.assistantVisible !== false) appendFinalAssistantMessage(runId, summary.assistantMessage);
-      if (summary.status) {
-        setRun((current) => current && current.runId === runId ? { ...current, status: summary.status ?? current.status, result: summary.result ?? current.result } : current);
+      if (summary.status || summary.run) {
+        setRun((current) => {
+          if (!current || current.runId !== runId) return current;
+          const merged = summary.run ? mergeRunSnapshot(current, summary.run) : current;
+          return {
+            ...merged,
+            status: summary.status ?? summary.run?.status ?? merged.status,
+            result: summary.result ?? summary.run?.result ?? merged.result,
+          };
+        });
       }
+      void getAgentRunActions(runId).then(setRunActionState).catch(() => undefined);
     } catch {
       const snapshot = await getAgentRun(runId);
       setRun((current) => {
         const effectiveConversationId = current?.runId === snapshot.runId ? current.conversationId : snapshot.conversationId;
-        return current?.runId === runId ? { ...snapshot, conversationId: effectiveConversationId } : current;
+        const effectiveSnapshot = effectiveConversationId ? { ...snapshot, conversationId: effectiveConversationId } : snapshot;
+        return current?.runId === runId ? mergeRunSnapshot(current, effectiveSnapshot) : current;
       });
       appendFinalAssistantMessage(runId, String(asRecord(snapshot.result)?.message ?? ""));
     }
@@ -1095,7 +1314,7 @@ export function AgentsPage({ projectId }: { projectId?: number }) {
   }, [activeRunId, loadRun]);
 
   const mergeRunData = useCallback((patch: Partial<AgentRunSnapshot>) => {
-    setRun((current) => current ? { ...current, ...patch } : current);
+    setRun((current) => mergeRunPatch(current, patch));
   }, []);
 
   const refreshGovernanceData = useCallback(async (runId: string, eventName?: string) => {
@@ -1128,6 +1347,7 @@ export function AgentsPage({ projectId }: { projectId?: number }) {
         void getAgentToolCall(toolCallId)
           .then((toolCall) => {
             setSelectedToolCallId(toolCall.toolCallId);
+            setSelectedItemId(toolIdentity(toolCall));
             setRun((current) => {
               if (!current) return current;
               const nextToolCalls = [
@@ -1157,7 +1377,7 @@ export function AgentsPage({ projectId }: { projectId?: number }) {
       void getAgentRun(activeRunId).then((snapshot) => {
         const effectiveConversationId = run?.runId === snapshot.runId ? run.conversationId : snapshot.conversationId;
         const effectiveSnapshot = effectiveConversationId ? { ...snapshot, conversationId: effectiveConversationId } : snapshot;
-        setRun(effectiveSnapshot);
+        setRun((current) => mergeRunSnapshot(current, effectiveSnapshot));
         rememberRun({
           runId: effectiveSnapshot.runId,
           projectId: effectiveSnapshot.projectId,
@@ -1202,6 +1422,7 @@ export function AgentsPage({ projectId }: { projectId?: number }) {
       setThinkingStartedAt(Date.now());
       setThinkingElapsedMs(0);
       setRun({
+        itemId: queued.itemId,
         runId: queued.runId,
         projectId,
         conversationId: currentConversationId,
@@ -1222,6 +1443,7 @@ export function AgentsPage({ projectId }: { projectId?: number }) {
         loopObservations: [],
       });
       replaceEvents([]);
+      setRunActionState(null);
       rememberRun({
         runId: queued.runId,
         projectId,
@@ -1243,15 +1465,45 @@ export function AgentsPage({ projectId }: { projectId?: number }) {
     }
   };
 
-  const runAction = async (action: () => Promise<AgentRunSnapshot>, successMessage: string) => {
+  const runAction = async (action: () => Promise<AgentRunSnapshot | AgentRunResumeResult>, successMessage: string) => {
     setIsActing(true);
     setError("");
     try {
-      const snapshot = await action();
-      setRun(snapshot);
-      setMessage(successMessage);
+      const result = await action();
+      const snapshot = isResumeResult(result) ? result.run : result;
+      setRun((current) => {
+        const merged = mergeRunSnapshot(current, snapshot);
+        return isResumeResult(result)
+          ? removeApprovalsForToolCalls(merged, result.observedToolCallIds)
+          : merged;
+      });
+      if (isResumeResult(result) && !result.resumed) {
+        const freshnessAction = String(result.checkpointFreshness?.action ?? "");
+        setMessage(freshnessAction === "replan_from_latest_safe_state"
+          ? "Checkpoint 已过期，请从最新安全状态重新规划，不要重复恢复。"
+          : "后端未恢复当前 Run，请查看 Runbook 或刷新最新状态。");
+      } else {
+        setMessage(successMessage);
+      }
+      void getAgentRunActions(snapshot.runId).then(setRunActionState).catch(() => undefined);
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : "操作失败，请稍后重试");
+    } finally {
+      setIsActing(false);
+    }
+  };
+
+  const reconcileCurrentRun = async (successMessage = "Reconcile 已触发。") => {
+    if (!run) return;
+    setIsActing(true);
+    setError("");
+    try {
+      await reconcileAgentRun(run.runId);
+      setMessage(successMessage);
+      await refreshRun();
+      getAgentRunActions(run.runId).then(setRunActionState).catch(() => undefined);
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : "Run 操作失败");
     } finally {
       setIsActing(false);
     }
@@ -1272,6 +1524,7 @@ export function AgentsPage({ projectId }: { projectId?: number }) {
       setRun(null);
       replaceEvents([]);
       setRunbook(null);
+      setRunActionState(null);
       setMemoryUsage([]);
     }
   };
@@ -1281,8 +1534,27 @@ export function AgentsPage({ projectId }: { projectId?: number }) {
     updateHistory((current) => current.map((entry) => historyConversationKey(entry) === itemKey ? { ...entry, pinned: !entry.pinned } : entry));
   };
 
-  const exportConversation = (item: AgentRunSummary) => {
-    const exportPayload = {
+  const downloadConversationExport = (name: string, exportPayload: unknown) => {
+    const blob = new Blob([JSON.stringify(exportPayload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `${name}.json`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const exportConversation = async (item: AgentRunSummary) => {
+    if (projectId && item.conversationId) {
+      try {
+        const backendExport = await getAgentConversationExport(projectId, item.conversationId);
+        downloadConversationExport(item.conversationId, backendExport);
+        return;
+      } catch {
+        // Keep export usable while older backends roll out the conversation export endpoint.
+      }
+    }
+    downloadConversationExport(item.conversationId || item.runId, {
       conversation_id: item.conversationId,
       run_id: item.runId,
       title: item.title,
@@ -1291,17 +1563,10 @@ export function AgentsPage({ projectId }: { projectId?: number }) {
       exported_at: new Date().toISOString(),
       events: item.runId === run?.runId ? events : [],
       tool_calls: item.runId === run?.runId ? run.toolCalls : [],
-    };
-    const blob = new Blob([JSON.stringify(exportPayload, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = `${item.conversationId || item.runId}.json`;
-    anchor.click();
-    URL.revokeObjectURL(url);
+    });
   };
 
-  const handleApprovalAction = async (approval: AgentApproval, action: "approve" | "reject") => {
+  const handleApprovalAction = async (approval: AgentApproval, action: "approve" | "reject", reason?: string) => {
     if (!approval.toolCallId) return;
     setIsActing(true);
     setError("");
@@ -1312,11 +1577,27 @@ export function AgentsPage({ projectId }: { projectId?: number }) {
         resourceScopeHash: approval.resourceScopeHash,
         approvalLineageId: approval.approvalLineageId,
         approvalEpoch: approval.approvalEpoch,
+        reason,
       };
-      await (action === "approve"
-        ? approveAgentToolCall(approval.toolCallId, casPayload)
-        : rejectAgentToolCall(approval.toolCallId, casPayload));
-      setMessage(action === "approve" ? "审批已批准，等待后端继续执行。" : "审批已拒绝。");
+      if (action === "approve") {
+        await approveAgentToolCall(approval.toolCallId, casPayload);
+        setRun((current) => updateApprovalStatus(current, approval, "approved"));
+        if (run) {
+          const resumeResult = await resumeAgentRun(run.runId);
+          setRun((current) => {
+            const merged = mergeRunSnapshot(current, resumeResult.run);
+            return removeApprovalsForToolCalls(merged, [
+              ...resumeResult.observedToolCallIds,
+              approval.toolCallId,
+            ]);
+          });
+        }
+        setMessage("审批已批准，后端已继续执行。");
+      } else {
+        await rejectAgentToolCall(approval.toolCallId, casPayload);
+        setRun((current) => updateApprovalStatus(current, approval, "rejected"));
+        setMessage("审批已拒绝。");
+      }
       await refreshRun();
     } catch (nextError) {
       const fallback = "审批操作失败；如果后端返回 409，表示审批已过期或上下文已变化，请刷新后重试。";
@@ -1341,6 +1622,43 @@ export function AgentsPage({ projectId }: { projectId?: number }) {
     }
   };
 
+  const focusActionResource = (action: AgentRunAction) => {
+    const itemId = action.resourceItemIds[0];
+    if (!itemId || !run) return;
+    setSelectedItemId(itemId);
+    const targetTool = run.toolCalls.find((toolCall) => toolCall.itemId === itemId || toolCall.toolCallId === action.resourceIds[0]);
+    if (targetTool) setSelectedToolCallId(targetTool.toolCallId);
+  };
+
+  const handleRunPrimaryAction = (action: AgentRunAction) => {
+    focusActionResource(action);
+    setIsInspectorOpen(true);
+    if (action.actionId === "review_approvals") {
+      const targetTool = run?.toolCalls.find((toolCall) => action.resourceItemIds.includes(toolCall.itemId || ""));
+      setInspectorTab(targetTool ? "tool" : "approval");
+      return;
+    }
+    if (action.actionId === "resolve_migration") {
+      setInspectorTab("run");
+      return;
+    }
+    if (action.actionId === "open_runbook") {
+      setInspectorTab("runbook");
+      return;
+    }
+    if (action.actionId === "resume_run") {
+      if (run) void runAction(() => resumeAgentRun(run.runId), "恢复请求已提交。");
+      return;
+    }
+    if (action.actionId === "reconcile_run") {
+      void reconcileCurrentRun();
+      return;
+    }
+    if (action.actionId === "cancel_run") {
+      if (run) void runAction(() => cancelAgentRun(run.runId), "取消请求已提交。");
+    }
+  };
+
   const handleRunbookSafeAction = (safeAction: AgentRunbookSafeAction) => {
     const action = safeAction.action ?? safeAction.key ?? "";
     if (action === "resume") {
@@ -1348,7 +1666,7 @@ export function AgentsPage({ projectId }: { projectId?: number }) {
       return;
     }
     if (action === "reconcile") {
-      if (run) void runAction(() => reconcileAgentRun(run.runId), "Reconcile 已触发。");
+      void reconcileCurrentRun();
       return;
     }
     if (action === "tool_call_detail") {
@@ -1495,7 +1813,7 @@ export function AgentsPage({ projectId }: { projectId?: number }) {
                       <button aria-label="重命名" onClick={() => renameHistoryItem(item)} type="button">
                         <Icon name="edit" />
                       </button>
-                      <button aria-label="导出" onClick={() => exportConversation(item)} type="button">
+                      <button aria-label="导出" onClick={() => void exportConversation(item)} type="button">
                         <Icon name="download" />
                       </button>
                       <button aria-label="删除本地历史" onClick={() => deleteHistoryItem(item)} type="button">
@@ -1525,18 +1843,36 @@ export function AgentsPage({ projectId }: { projectId?: number }) {
               <Icon name={isLoadingRun ? "progress_activity" : "refresh"} />
               刷新
             </button>
-            <button className="btn" disabled={isActing || !run} onClick={() => run && runAction(() => reconcileAgentRun(run.runId), "Reconcile 已触发。")} type="button">
-              <Icon name="sync_problem" />
-              Reconcile
-            </button>
-            <button className="btn" disabled={isActing || !canCancel} onClick={() => run && runAction(() => cancelAgentRun(run.runId), "取消请求已提交。")} type="button">
-              <Icon name="stop_circle" />
-              取消
-            </button>
-            <button className="btn primary" disabled={isActing || !canResume} onClick={() => run && runAction(() => resumeAgentRun(run.runId), "恢复请求已提交。")} type="button">
-              <Icon name="play_arrow" />
-              恢复
-            </button>
+            {primaryRunActions.length ? primaryRunActions.map((action) => (
+              <div className="agent-action-item" key={action.actionId}>
+                <button
+                  className={action.enabled ? "btn primary" : "btn"}
+                  disabled={isActing || !action.enabled}
+                  onClick={() => handleRunPrimaryAction(action)}
+                  title={runActionHint(action) || action.resourceItemIds.join(", ")}
+                  type="button"
+                >
+                  <Icon name={action.actionId === "cancel_run" ? "stop_circle" : action.actionId === "resume_run" ? "play_arrow" : "sync_problem"} />
+                  {action.label || action.actionId}
+                </button>
+                {runActionHint(action) ? <small>{runActionHint(action)}</small> : null}
+              </div>
+            )) : (
+              <>
+                <button className="btn" disabled={isActing || !run} onClick={() => void reconcileCurrentRun()} type="button">
+                  <Icon name="sync_problem" />
+                  Reconcile
+                </button>
+                <button className="btn" disabled={isActing || !canCancel} onClick={() => run && runAction(() => cancelAgentRun(run.runId), "取消请求已提交。")} type="button">
+                  <Icon name="stop_circle" />
+                  取消
+                </button>
+                <button className="btn primary" disabled={isActing || !canResume} onClick={() => run && runAction(() => resumeAgentRun(run.runId), "恢复请求已提交。")} type="button">
+                  <Icon name="play_arrow" />
+                  恢复
+                </button>
+              </>
+            )}
           </div>
         </aside>
 
@@ -1573,7 +1909,7 @@ export function AgentsPage({ projectId }: { projectId?: number }) {
               const turnOpenMigrationBlocks = turn.migrationBlocks.filter((block) => block.status === "open");
 
               return (
-                <Fragment key={turn.runId}>
+                <Fragment key={runIdentity(turn)}>
                   <ThreadMessage icon="person" meta="用户目标" title={turn.intent || prompt} variant="user">
                     <p>{turn.intent || prompt}</p>
                     <div className="agent-thread-tags">
@@ -1600,6 +1936,7 @@ export function AgentsPage({ projectId }: { projectId?: number }) {
                           key={`${turn.runId}-${item.key}`}
                           onSelect={() => {
                             setSelectedToolCallId(item.toolCall.toolCallId);
+                            setSelectedItemId(toolIdentity(item.toolCall));
                             setInspectorTab("tool");
                             setIsInspectorOpen(true);
                           }}
@@ -1613,7 +1950,7 @@ export function AgentsPage({ projectId }: { projectId?: number }) {
                   {turn.contextBuilds.map((contextBuild) => (
                     <ThreadMessage
                       icon="manage_search"
-                      key={`${turn.runId}-${contextBuild.contextBuildId}`}
+                      key={`${turn.runId}-${contextBuild.itemId || contextBuild.contextBuildId}`}
                       meta="Context Build"
                       title={contextBuild.degradationReason || contextBuild.status || "上下文构建结果"}
                       tone={contextBuild.degradationReason ? "warning" : "default"}
@@ -1622,20 +1959,8 @@ export function AgentsPage({ projectId }: { projectId?: number }) {
                     </ThreadMessage>
                   ))}
 
-                  {turn.loopObservations.map((observation) => (
-                    <ThreadMessage
-                      icon="cycle"
-                      key={`${turn.runId}-${observation.observationId}`}
-                      meta="Loop Observation"
-                      title={observation.rootCause || observation.stopReason || "循环观察"}
-                      tone="warning"
-                    >
-                      <LoopObservationSummary observation={observation} />
-                    </ThreadMessage>
-                  ))}
-
                   {turnPendingApprovals.map((approval) => (
-                    <ThreadMessage icon="approval" key={`${turn.runId}-${approval.approvalId}`} meta="需要审批" title="工具调用等待人工确认" tone="warning">
+                    <ThreadMessage icon="approval" key={`${turn.runId}-${approval.itemId || approval.approvalId}`} meta="需要审批" title="工具调用等待人工确认" tone="warning">
                       <ApprovalCard
                         approval={approval}
                         disabled={isActing}
@@ -1646,7 +1971,7 @@ export function AgentsPage({ projectId }: { projectId?: number }) {
                   ))}
 
                   {turnOpenMigrationBlocks.map((block) => (
-                    <ThreadMessage icon="running_with_errors" key={`${turn.runId}-${block.blockId}`} meta="迁移阻断" title={block.reason || "迁移阻断"} tone="warning">
+                    <ThreadMessage icon="running_with_errors" key={`${turn.runId}-${block.itemId || block.blockId}`} meta="迁移阻断" title={block.reason || "迁移阻断"} tone="warning">
                       <MigrationCard block={block} disabled={isActing} onResolve={() => handleResolveBlock(block)} />
                     </ThreadMessage>
                   ))}
@@ -1670,6 +1995,15 @@ export function AgentsPage({ projectId }: { projectId?: number }) {
               void handleCreateRun();
             }}
           >
+            {bottomApproval && (
+              <ApprovalDecisionPrompt
+                approval={bottomApproval}
+                disabled={isActing}
+                onApprove={() => handleApprovalAction(bottomApproval, "approve")}
+                onReject={() => handleApprovalAction(bottomApproval, "reject", "user_rejected_from_agent_bottom_prompt")}
+                toolCall={bottomApprovalToolCall}
+              />
+            )}
             <div className="agent-composer-top">
               <span>本地历史 · 多轮对话</span>
               <label>
@@ -1733,13 +2067,18 @@ export function AgentsPage({ projectId }: { projectId?: number }) {
           metrics={metrics}
           onMemoryFeedback={(usageEvent, feedback) => {
             void sendAgentMemoryFeedback(usageEvent.usageEventId, feedback)
-              .then((updated) => setMemoryUsage((current) => current.map((item) => item.usageEventId === updated.usageEventId ? updated : item)))
+              .then(() => setMemoryUsage((current) => current.map((item) => (
+                item.usageEventId === usageEvent.usageEventId ? { ...item, feedback } : item
+              ))))
               .catch((nextError) => setError(nextError instanceof Error ? nextError.message : "Memory feedback 提交失败"));
           }}
-          onReconcile={() => run && void runAction(() => reconcileAgentRun(run.runId), "Reconcile 已触发。")}
+          onReconcile={() => void reconcileCurrentRun()}
+          onRunPrimaryAction={handleRunPrimaryAction}
           onRunbookSafeAction={handleRunbookSafeAction}
           onResume={() => run && void runAction(() => resumeAgentRun(run.runId), "恢复请求已提交。")}
+          primaryRunActions={primaryRunActions}
           run={run}
+          runActionState={runActionState}
           runbook={runbook}
           promotionGate={promotionGate}
           releaseGates={releaseGates}
@@ -1783,8 +2122,7 @@ function ThreadMessage({
 
 function ThreadEvent({ event }: { event: AgentRunEvent }) {
   const isAttention = event.event.includes("uncertain") || event.event.includes("migration") || event.event.includes("approval");
-  const content = event.payload.content ?? event.payload.delta ?? event.payload.message;
-  const hasPayload = Object.keys(event.payload).length > 0;
+  const content = event.payload.content ?? event.payload.delta ?? event.payload.message ?? event.payload.error_message ?? event.payload.reason;
   const title = eventDisplayTitle(event.event);
 
   return (
@@ -1793,15 +2131,9 @@ function ThreadEvent({ event }: { event: AgentRunEvent }) {
         <Icon name={event.event.startsWith("tool.") ? "terminal" : event.event.startsWith("model.") ? "psychology" : "radio_button_checked"} />
       </div>
       <div className="agent-thread-body">
-        <span>{event.sequence ? `#${event.sequence}` : "event"} · {event.createdAt || "实时"}</span>
+        <span>{event.createdAt || "实时"}</span>
         <h3>{title}</h3>
         {content !== undefined ? <MarkdownContent content={String(content)} /> : null}
-        {hasPayload && content === undefined ? (
-          <details className="agent-event-payload">
-            <summary>原始输出</summary>
-            <pre>{stringifyValue(event.payload)}</pre>
-          </details>
-        ) : null}
       </div>
     </article>
   );
@@ -1914,9 +2246,12 @@ function RunInspector({
   metrics,
   onMemoryFeedback,
   onReconcile,
+  onRunPrimaryAction,
   onRunbookSafeAction,
   onResume,
+  primaryRunActions,
   run,
+  runActionState,
   runbook,
   promotionGate,
   releaseGates,
@@ -1931,9 +2266,12 @@ function RunInspector({
   metrics: AgentMetricsSnapshot | null;
   onMemoryFeedback: (usageEvent: AgentMemoryUsageEvent, feedback: AgentMemoryUsageEvent["feedback"]) => void;
   onReconcile: () => void;
+  onRunPrimaryAction: (action: AgentRunAction) => void;
   onRunbookSafeAction: (safeAction: AgentRunbookSafeAction) => void;
   onResume: () => void;
+  primaryRunActions: AgentRunAction[];
   run: AgentRunSnapshot | null;
+  runActionState: AgentRunActionState | null;
   runbook: AgentRunbook | null;
   promotionGate: AgentReleaseGate | null;
   releaseGates: AgentReleaseGate[];
@@ -1981,6 +2319,32 @@ function RunInspector({
                   <span>{run.errorMessage}</span>
                 </div>
               )}
+              {runActionState && (
+                <>
+                  <KeyValue label="terminal" value={runActionState.runSummary?.terminal} />
+                  <KeyValue label="pending approvals" value={runActionState.runSummary?.pendingApprovalCount} />
+                  <KeyValue label="open migrations" value={runActionState.runSummary?.openMigrationBlockCount} />
+                  <KeyValue label="blocking tools" value={runActionState.runSummary?.blockingToolCallIds?.join(", ")} />
+                </>
+              )}
+              {primaryRunActions.length ? (
+                <div className="agent-card-actions">
+                  {primaryRunActions.map((action) => (
+                    <div className="agent-action-item" key={action.actionId}>
+                      <button
+                        className={action.enabled ? "btn primary" : "btn"}
+                        disabled={disabled || !action.enabled}
+                        onClick={() => onRunPrimaryAction(action)}
+                        title={runActionHint(action) || action.resourceItemIds.join(", ")}
+                        type="button"
+                      >
+                        {action.label || action.actionId}
+                      </button>
+                      {runActionHint(action) ? <small>{runActionHint(action)}</small> : null}
+                    </div>
+                  ))}
+                </div>
+              ) : null}
             </div>
           ) : (
             <EmptyState icon="terminal" title="尚未选择 Run" description="创建或打开本地历史 Run 后展示运行详情。" />
@@ -2001,7 +2365,7 @@ function RunInspector({
           {run?.approvals.length ? (
             <div className="agent-check-list">
               {run.approvals.map((approval) => (
-                <div className="agent-check-row" key={approval.approvalId}>
+                <div className="agent-check-row" key={approval.itemId || approval.approvalId}>
                   <span>{approval.approvalId}</span>
                   <StatusBadge status={approval.status} />
                   <small>input_hash: {approval.inputHash || "-"}</small>
@@ -2022,7 +2386,7 @@ function RunInspector({
           {memoryUsage.length ? (
             <div className="agent-check-list">
               {memoryUsage.map((usageEvent) => (
-                <div className="agent-check-row" key={usageEvent.usageEventId}>
+                <div className="agent-check-row" key={usageEvent.itemId || usageEvent.usageEventId}>
                   <span>{usageEvent.memoryKey || usageEvent.usageEventId}</span>
                   <small>{usageEvent.usageType || "usage"} · risk: {usageEvent.riskLevel || "-"}</small>
                   <pre>{stringifyValue(usageEvent.evidence)}</pre>
@@ -2055,7 +2419,7 @@ function RunInspector({
             <div className="agent-runbook">
               <p>{runbook.diagnosis || "暂无诊断摘要。"}</p>
               {runbook.recommendations?.map((item) => (
-                <div className="agent-check-row" key={item.key || item.label}>
+                <div className="agent-check-row" key={item.itemId || item.key || item.label}>
                   <span>{item.label || item.key || item.action}</span>
                   <small>{item.reason || item.severity || "-"}</small>
                 </div>
@@ -2071,7 +2435,7 @@ function RunInspector({
                     <button
                       className={action === "resume" ? "btn primary" : "btn"}
                       disabled={disabled || !run || !canRunAction}
-                      key={`${action}-${safeAction.targetId ?? safeAction.label ?? safeAction.key ?? "action"}`}
+                      key={safeAction.itemId || `${action}-${safeAction.targetId ?? safeAction.label ?? safeAction.key ?? "action"}`}
                       onClick={() => onRunbookSafeAction(safeAction)}
                       title={canRunAction ? safeAction.reason : "目标契约：当前前端不调用不存在的后端接口"}
                       type="button"
@@ -2098,7 +2462,7 @@ function RunInspector({
                 <StatusBadge status={dashboard.readiness} />
               </div>
               {dashboard.checks.map((check) => (
-                <div className="agent-check-row" key={check.key}>
+                <div className="agent-check-row" key={check.itemId || check.key}>
                   <span>{check.key}</span>
                   <StatusBadge status={check.status} />
                   <small>{check.severity || "-"} · {check.message || "-"}</small>
@@ -2143,16 +2507,43 @@ function ContextBuildSummary({ contextBuild }: { contextBuild: AgentContextBuild
   );
 }
 
-function LoopObservationSummary({ observation }: { observation: AgentLoopObservation }) {
+function ApprovalDecisionPrompt({
+  approval,
+  disabled,
+  onApprove,
+  onReject,
+  toolCall,
+}: {
+  approval: AgentApproval;
+  disabled: boolean;
+  onApprove: () => void;
+  onReject: () => void;
+  toolCall?: AgentToolCall;
+}) {
+  const toolName = toolCall ? toolCallDisplayName(toolCall) : approval.permissionScope || "待审批工具调用";
+  const permission = approval.permissionScope || (toolCall?.requiredPermissionsJson ? stringifyValue(toolCall.requiredPermissionsJson) : "");
+  const reason = approval.riskReason || "该工具调用会修改或提交业务数据，需要你确认后才能继续。";
+
   return (
-    <div className="agent-detail-grid">
-      <KeyValue label="stop_reason" value={observation.stopReason} />
-      <KeyValue label="mitigation" value={observation.mitigation} />
-      <div className="agent-json-block">
-        <strong>causal_chain</strong>
-        <pre>{stringifyValue(observation.causalChain)}</pre>
+    <section aria-label="工具调用审批" className="agent-approval-popover" role="group">
+      <div className="agent-approval-popover-icon">
+        <Icon name="approval" />
       </div>
-    </div>
+      <div className="agent-approval-popover-copy">
+        <span>需要确认</span>
+        <strong>是否批准本次工具调用？</strong>
+        <p>{toolName}</p>
+        <small>{permission ? `权限：${truncateInline(permission, 96)} · ${reason}` : reason}</small>
+      </div>
+      <div className="agent-approval-popover-actions">
+        <button aria-label="否，拒绝工具调用" className="btn" disabled={disabled} onClick={onReject} type="button">
+          否
+        </button>
+        <button aria-label="是，批准工具调用" className="btn primary" disabled={disabled} onClick={onApprove} type="button">
+          是
+        </button>
+      </div>
+    </section>
   );
 }
 

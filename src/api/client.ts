@@ -43,6 +43,7 @@ export class EventStreamRequestError extends Error {
 }
 
 let refreshPromise: Promise<string> | null = null;
+const inFlightJsonRequests = new Map<string, Promise<unknown>>();
 
 export function clearSession() {
   localStorage.removeItem("access_token");
@@ -151,6 +152,65 @@ function buildJsonHeaders(headers?: HeadersInit, withAuth = false, body?: BodyIn
   return nextHeaders;
 }
 
+function getRequestMethod(init: RequestInit) {
+  return (init.method ?? "GET").toUpperCase();
+}
+
+function canCoalesceJsonUrl(url: string) {
+  const pathname = (() => {
+    try {
+      return new URL(url).pathname;
+    } catch {
+      return url.split("?")[0];
+    }
+  })();
+  return [
+    "/agents/dashboard",
+    "/agents/metrics",
+    "/agents/alerts",
+    "/agents/release-gates",
+    "/agents/release-gates/promotion",
+    "/projects",
+    "/environment-configs",
+  ].some((path) => pathname.endsWith(path));
+}
+
+function canCoalesceJsonRequest(url: string, init: RequestInit) {
+  return getRequestMethod(init) === "GET" && !init.body && !init.signal && canCoalesceJsonUrl(url);
+}
+
+function headersKey(headers: Headers) {
+  return Array.from(headers.entries())
+    .map(([key, value]) => [key.toLowerCase(), value] as const)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, value]) => `${key}:${value}`)
+    .join("\n");
+}
+
+function jsonRequestKey(url: string, init: RequestInit, headers: Headers) {
+  return JSON.stringify({
+    method: getRequestMethod(init),
+    url,
+    headers: headersKey(headers),
+    cache: init.cache,
+    credentials: init.credentials,
+    mode: init.mode,
+    redirect: init.redirect,
+  });
+}
+
+function coalesceJsonRequest<T>(key: string, producer: () => Promise<T>) {
+  const existing = inFlightJsonRequests.get(key) as Promise<T> | undefined;
+  if (existing) return existing;
+
+  let requestPromise!: Promise<T>;
+  requestPromise = producer().finally(() => {
+    if (inFlightJsonRequests.get(key) === requestPromise) inFlightJsonRequests.delete(key);
+  });
+  inFlightJsonRequests.set(key, requestPromise);
+  return requestPromise;
+}
+
 function resolveApiUrl(path: string) {
   if (/^https?:\/\//i.test(path)) return path;
   if (path.startsWith("/api/")) {
@@ -161,6 +221,15 @@ function resolveApiUrl(path: string) {
 }
 
 export async function requestPublic<T>(path: string, init: RequestInit = {}) {
+  const coalescedUrl = `${API_BASE_URL}${path}`;
+  const coalescedHeaders = buildJsonHeaders(init.headers, false, init.body);
+  if (canCoalesceJsonRequest(coalescedUrl, init)) {
+    return coalesceJsonRequest(jsonRequestKey(coalescedUrl, init, coalescedHeaders), async () => {
+      const response = await fetch(coalescedUrl, { ...init, headers: coalescedHeaders });
+      return parseJsonResponse<T>(response, "Request failed, please try again later");
+    });
+  }
+
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...init,
     headers: buildJsonHeaders(init.headers, false, init.body),
@@ -171,6 +240,21 @@ export async function requestPublic<T>(path: string, init: RequestInit = {}) {
 
 export async function requestWithAuth<T>(path: string, init: RequestInit = {}) {
   if (shouldRefreshAccessToken()) await refreshAccessToken();
+
+  const coalescedUrl = `${API_BASE_URL}${path}`;
+  const coalescedHeaders = buildJsonHeaders(init.headers, true, init.body);
+  if (canCoalesceJsonRequest(coalescedUrl, init)) {
+    return coalesceJsonRequest(jsonRequestKey(coalescedUrl, init, coalescedHeaders), async () => {
+      const response = await fetch(coalescedUrl, { ...init, headers: coalescedHeaders });
+      if (response.status === 401) {
+        const payload = await response.json().catch(() => null);
+        const message = getResponseMessage(payload, "Login expired, please sign in again");
+        notifyAuthExpired(message);
+        throw new Error(message);
+      }
+      return parseJsonResponse<T>(response, "API request failed, please try again later");
+    });
+  }
 
   const send = () =>
     fetch(`${API_BASE_URL}${path}`, {

@@ -1,7 +1,7 @@
 # 前端性能优化文档
 
 状态：当前规范
-最后核验：2026-06-15
+最后核验：2026-07-02
 
 本文档记录 TestAuto 前端性能相关的约定和当前已完成的优化，后续新增页面、列表、弹窗和接口调用时应同步遵守。
 
@@ -25,6 +25,7 @@
 | `src/App.tsx` | `Navigation`、`TopBar`、`Toast` 使用 `memo`，减少全局状态变化导致的重复渲染 |
 | `src/App.tsx` | 项目列表、环境列表请求增加过期响应保护，快速切换时旧响应不会覆盖新状态 |
 | `src/App.tsx` | 顶部环境下拉跟随项目加载真实环境，不再使用静态环境 mock |
+| `src/api/client.ts` | 对 dashboard、metrics、alerts、release gates、项目和环境配置等首屏只读端点复用同一个 in-flight Promise，减少 StrictMode 或重复挂载造成的重复请求；普通业务列表、POST/PUT/PATCH/DELETE、带 body、带 signal 和 SSE 请求不合并 |
 
 ### 接口测试用例
 
@@ -51,6 +52,7 @@
 2. 任何列表接口都不应依赖前端默认 ID；项目 ID、环境 ID 必须来自当前选择或后端返回。
 3. 页面组件只调用 `src/api/` 中的函数，不直接写 `fetch`。
 4. API 封装负责鉴权头、错误消息、统一响应解包和字段映射。
+5. dashboard、metrics、alerts、release gates、项目列表和环境配置等首屏只读请求由 `src/api/client.ts` 复用同一个 in-flight Promise；页面层不应重复实现这些请求的去重。普通业务列表、会改变服务端状态的请求、SSE 和显式传入 `AbortSignal` 的请求必须保持独立。
 
 ### 列表与表格
 
